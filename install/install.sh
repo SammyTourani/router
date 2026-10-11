@@ -3056,7 +3056,7 @@ toggle_opencode() {
 # Public, unauthed catalog of everything the router can route to. Mounted in
 # both deployment modes, so it is the one listing that always works.
 MODELS_CATALOG_PATH="/v1/router/models"
-MODELS_DASHBOARD_URL="https://router.workweave.ai/dashboard/settings"
+MODELS_DASHBOARD_URL="https://router.workweave.ai/models"
 
 # Set by models_api on every call.
 models_http_status=""
