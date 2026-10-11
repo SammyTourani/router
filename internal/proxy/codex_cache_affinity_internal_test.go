@@ -43,14 +43,14 @@ func TestCodexSubscriptionIngressKeepsCacheAffinityAcrossTurns(t *testing.T) {
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {
 			var mu sync.Mutex
-			var headers, bodyKeys []string
+			var sessionIDs, bodyKeys []string
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if serveSyntheticCodexQuota(w, r) {
 					return
 				}
 				body, _ := io.ReadAll(r.Body)
 				mu.Lock()
-				headers = append(headers, r.Header.Get("Session-Id"))
+				sessionIDs = append(sessionIDs, r.Header.Get("Session-Id"))
 				bodyKeys = append(bodyKeys, gjson.GetBytes(body, "prompt_cache_key").String())
 				mu.Unlock()
 				w.Header().Set("Content-Type", "text/event-stream")
@@ -75,11 +75,11 @@ func TestCodexSubscriptionIngressKeepsCacheAffinityAcrossTurns(t *testing.T) {
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			require.Len(t, headers, len(fixture.turns))
-			require.NotEmpty(t, headers[0], "Codex OAuth caches on Session-Id, not the body hint alone")
-			for i := range headers {
-				require.Equal(t, headers[0], headers[i], "cache affinity must survive across turns")
-				require.Equal(t, bodyKeys[i], headers[i])
+			require.Len(t, sessionIDs, len(fixture.turns))
+			require.NotEmpty(t, sessionIDs[0], "Codex OAuth caches on Session-Id, not the body hint alone")
+			for i := range sessionIDs {
+				require.Equal(t, sessionIDs[0], sessionIDs[i], "cache affinity must survive across turns")
+				require.Equal(t, bodyKeys[i], sessionIDs[i])
 			}
 		})
 	}
