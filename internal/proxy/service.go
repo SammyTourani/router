@@ -64,6 +64,10 @@ type TelemetryEmitter interface {
 
 // Service orchestrates routing decisions and provider dispatch.
 type Service struct {
+	recoveryProbeMu     sync.Mutex
+	recoveryProbeLeases map[string]localRecoveryProbeLease
+	nextRecoveryProbeID uint64
+
 	router             router.Router
 	subscriptionModels subscriptionModelAccess
 	// strategies contains every non-default router and its optional lifecycle
@@ -548,6 +552,10 @@ type SessionDemotedModelsContextKey struct{}
 // transient_rate_limit is on; the in-turn rescue readmits these arms when
 // honouring them would leave no candidate.
 type SessionCooldownModelsContextKey struct{}
+
+// SessionCooldownProbeDeniedModelsContextKey carries expired models leased by
+// another in-flight request; rescue paths must not read them back in.
+type SessionCooldownProbeDeniedModelsContextKey struct{}
 
 // SessionStrikeReadmitModelsContextKey carries the session-lifetime demotions
 // ([]string) the in-turn rescue may readmit when every other candidate,
@@ -1615,7 +1623,7 @@ func (s *Service) avoidCodexOnChatEndpoint(ctx context.Context, provider, model 
 		return ctx, nil
 	}
 	if !s.openaiFallbackKeyAvailable(ctx) {
-		return nil, ErrCreditsExhaustedSubscriptionUnavailable
+		return nil, subscriptionOnlyUnavailable(ctx)
 	}
 	return withCodexChatEndpoint(ctx), nil
 }
@@ -1870,13 +1878,119 @@ func (s *Service) WithRescuedFailureArmDemotion(enabled bool) *Service {
 	return s
 }
 
-// WithTransientRateLimit sets the deployment defaults for treating an
-// upstream 429 as throttling rather than a dead arm
+// WithTransientRateLimit sets the deployment defaults for temporarily
+// withdrawing rescued 429 and gateway 5xx failures rather than striking them
+// for the session
 // (ROUTER_TRANSIENT_RATE_LIMIT, ROUTER_RATE_LIMIT_COOLDOWN_SECONDS).
 func (s *Service) WithTransientRateLimit(enabled bool, cooldownSeconds int) *Service {
 	s.transientRateLimit = enabled
 	s.rateLimitCooldownSeconds = cooldownSeconds
 	return s
+}
+
+const recoveryProbeLeaseDuration = 15 * time.Minute
+
+// localRecoveryProbeLease is the in-process stand-in for a durable lease row:
+// the id keeps a stale release from freeing a newer lease, the expiry keeps a
+// request that never released from denying the model forever.
+type localRecoveryProbeLease struct {
+	id    uint64
+	until time.Time
+}
+
+// recoveryProbeLeaseFor bounds a lease to the safety duration, or one minute
+// past a known request deadline when that is later, so a probe cannot be
+// freed while its request may still be streaming.
+func (s *Service) recoveryProbeLeaseFor(ctx context.Context) time.Duration {
+	leaseFor := recoveryProbeLeaseDuration
+	if deadline, hasDeadline := ctx.Deadline(); hasDeadline {
+		if untilDeadline := deadline.Add(time.Minute).Sub(s.clockNow()); untilDeadline > leaseFor {
+			leaseFor = untilDeadline
+		}
+	}
+	return leaseFor
+}
+
+// acquireRecoveryProbe grants one in-flight recovery attempt for a session/model
+// pair. A durable pin store shares the lease across router workers; the local
+// map keeps stores used by offline tests and tooling behaviorally equivalent.
+func (s *Service) acquireRecoveryProbe(ctx context.Context, sessionKey [sessionpin.SessionKeyLen]byte, model string) (func(), bool) {
+	if sessionKey == ([sessionpin.SessionKeyLen]byte{}) || model == "" {
+		return func() {}, true
+	}
+	leaseFor := s.recoveryProbeLeaseFor(ctx)
+	if store, ok := s.pinStore.(sessionpin.RecoveryProbeStore); ok {
+		token := uuid.New()
+		acquired, err := store.AcquireRecoveryProbe(ctx, sessionKey, model, token, leaseFor)
+		if err != nil {
+			observability.FromContext(ctx).Warn("failed to acquire recovery probe lease; keeping model out for this request", "model", model, "err", err)
+			return nil, false
+		}
+		if !acquired {
+			return nil, false
+		}
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				releaseCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				if err := store.ReleaseRecoveryProbe(releaseCtx, sessionKey, model, token); err != nil {
+					observability.FromContext(ctx).Warn("failed to release recovery probe lease; it will expire", "model", model, "err", err)
+				}
+			})
+		}, true
+	}
+	key := string(sessionKey[:]) + "\x00" + model
+	now := s.clockNow()
+	s.recoveryProbeMu.Lock()
+	if lease, exists := s.recoveryProbeLeases[key]; exists && now.Before(lease.until) {
+		s.recoveryProbeMu.Unlock()
+		return nil, false
+	}
+	if s.recoveryProbeLeases == nil {
+		s.recoveryProbeLeases = make(map[string]localRecoveryProbeLease)
+	}
+	s.nextRecoveryProbeID++
+	leaseID := s.nextRecoveryProbeID
+	s.recoveryProbeLeases[key] = localRecoveryProbeLease{id: leaseID, until: now.Add(leaseFor)}
+	s.recoveryProbeMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.recoveryProbeMu.Lock()
+			if s.recoveryProbeLeases[key].id == leaseID {
+				delete(s.recoveryProbeLeases, key)
+			}
+			s.recoveryProbeMu.Unlock()
+		})
+	}, true
+}
+
+// clearRecoveredCooldown lifts the cooldown behind this request's recovery
+// probe once the probed model served the turn without an upstream error, on
+// every row the next turn merges (see mergeDemotionCooldowns). A failed probe
+// leaves the cooldown to maybeStrikeArmAfterRescuedFailure, which rewrites it.
+func (s *Service) clearRecoveredCooldown(ctx context.Context, res turnLoopResult, servedModel string, proxyErr error) {
+	observedUntil, probed := res.CooldownProbes[servedModel]
+	if !probed || proxyErr != nil {
+		return
+	}
+	store, ok := s.pinStore.(sessionpin.RecoveryProbeStore)
+	if !ok {
+		return
+	}
+	pinRole := res.PinRole
+	if pinRole == "" {
+		pinRole = sessionpin.DefaultRole
+	}
+	// context.Background(): the request ctx is already canceled once streaming
+	// finishes, and the recovery must still land.
+	for _, role := range demotionRoles(pinRole, pinRole) {
+		if err := store.ClearDemotionCooldown(context.Background(), res.SessionKey, role, servedModel, observedUntil); err != nil {
+			observability.FromContext(ctx).Warn("failed to clear recovered cooldown; next turns keep probing", "model", servedModel, "role", role, "err", err)
+		}
+	}
 }
 
 // WithNativeAnthropicResponseSignals is the kill switch
@@ -2933,6 +3047,11 @@ func (s *Service) WithBanditRouter(r router.Router) *Service {
 // which strategy actually served the turn.
 func (s *Service) routeFor(ctx context.Context, req router.Request) (router.Decision, error) {
 	var err error
+	if denied, _ := ctx.Value(SessionCooldownProbeDeniedModelsContextKey{}).([]string); len(denied) > 0 {
+		for _, model := range denied {
+			req.ExcludedModels = excludingModel(req.ExcludedModels, model)
+		}
+	}
 	req, err = s.applyTranslationPlan(ctx, req)
 	if err != nil {
 		return router.Decision{}, err
@@ -3451,6 +3570,7 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 	// Strip the routing marker prior responses injected as assistant text —
 	// clients echo it back verbatim, so left in place it accumulates in
 	// upstream context every turn.
+	ctx = withSubscriptionOnlyWarningEcho(ctx, body)
 	body, stripErr := stripRoutingMarkerFromMessages(body)
 	if stripErr != nil {
 		log.Error("Failed to strip routing marker from inbound messages", "err", stripErr)
@@ -3805,6 +3925,7 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 	} else {
 		routeRes, routeErr = s.runTurnLoop(routeCtx, env, feats, apiKeyID, installationID, "", r.Header, req)
 	}
+	defer routeRes.releaseCooldownProbes()
 	var escalationCapture *captureWriter
 	defer func() {
 		if !preparingHandoff(ctx) {
@@ -3835,6 +3956,9 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 			ctx = context.WithValue(ctx, SessionStrikeReadmitModelsContextKey{}, routeRes.SessionStrikeReadmitModels)
 		}
 	}
+	if len(routeRes.CooldownProbeDeniedModels) > 0 {
+		ctx = context.WithValue(ctx, SessionCooldownProbeDeniedModelsContextKey{}, routeRes.CooldownProbeDeniedModels)
+	}
 
 	// A retryable bypass error falls through to normal dispatch. Rate-limit
 	// headers prime the observer so the retry skips exhausted capacity; a
@@ -3864,7 +3988,7 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 			} else {
 				log.Info("Subscription-only bypass hit retryable error; refusing instead of paid reroute",
 					"request_id", requestID, "external_id", externalID)
-				return ErrCreditsExhaustedSubscriptionUnavailable
+				return subscriptionOnlyUnavailable(ctx)
 			}
 		}
 
@@ -4154,13 +4278,13 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 			if !ok {
 				log.Info("Subscription-only request cannot be served on the subscription; refusing",
 					"requested_model", feats.Model, "external_id", externalID, "decision_provider", decision.Provider)
-				return ErrCreditsExhaustedSubscriptionUnavailable
+				return subscriptionOnlyUnavailable(ctx)
 			}
 			ctx = released
 		case s.anthropicSubscriptionObservedExhausted(ctx, r.Header) && !claudeSubscriptionSuppressed(ctx):
 			log.Info("Subscription-only request cannot be served on the subscription; refusing",
 				"requested_model", feats.Model, "external_id", externalID, "decision_provider", decision.Provider)
-			return ErrCreditsExhaustedSubscriptionUnavailable
+			return subscriptionOnlyUnavailable(ctx)
 		default:
 			bindings = []catalog.ProviderBinding{{Provider: decision.Provider}}
 		}
@@ -4236,7 +4360,7 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 	// guard above has already refused any turn that wouldn't run on the caller's
 	// own sub, so a turn reaching here is served free and should carry the top-up
 	// CTA. A linked-first turn keeps its ordinary marker.
-	if warning := subscriptionOnlyWarningMarkerForRequest(ctx, r.Header, subscriptionOnlyWarningMarker); warning != "" {
+	if warning := subscriptionOnlyWarningMarkerForRequest(ctx, r.Header, anthropicSubscriptionOnlyWarnings); warning != "" {
 		marker = warning
 	}
 	// toolValidator compiles the request's tool schemas once (LRU-cached);
@@ -4834,15 +4958,16 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 
 	// Subscription-credit failover: suppress the OAuth token and retry the SAME
 	// model once on the Weave/BYOK key when a subscription-served Anthropic turn
-	// hit a transient fault (429/timeout), an OAuth rejection (401/403), or a
-	// model-access 404 (subscription token cannot use that Claude model),
+	// hit a transient fault (429/timeout), an OAuth rejection (401/403), a
+	// model-access 404 (subscription token cannot use that Claude model), or a
+	// third-party-client refusal (400: plan limits serve only Claude Code),
 	// pre-commit. Skipped when baseline failover already ran (non-Anthropic).
 	subscriptionFailoverUsed := false
 	subscriptionRetryRan := false
 	subscriptionFailoverAttempted := false
 	if subscriptionRetryEligible && !paidFallbackForbiddenForModel(ctx, decision.Model) && !baselineAttempted && proxyErr != nil &&
 		!preludeBuf.Committed() &&
-		(providers.IsRetryable(proxyErr) || anthropicOAuthCredentialRejected(proxyErr) || anthropicSubscriptionModelRejected(proxyErr)) {
+		(providers.IsRetryable(proxyErr) || anthropicOAuthCredentialRejected(proxyErr) || anthropicSubscriptionModelRejected(proxyErr) || anthropicSubscriptionThirdPartyRefused(proxyErr)) {
 		subscriptionRetryRan = true
 		subCtx := subscriptionStatePaidRescueContext(withSuppressedClaudeSubscription(ctx), decision.Model)
 		subCtx = resolveAndInjectCredentials(subCtx, providers.ProviderAnthropic, decision.Model, r.Header)
@@ -5161,6 +5286,7 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 
 	if !agentShadowMode {
 		s.recordTurnUsage(ctx, routeRes, finalProvider, decision.ServedIdentity(), in, out, cacheCreation, cacheRead, extractor.OutputLimitReached())
+		s.clearRecoveredCooldown(ctx, routeRes, decision.Model, proxyErr)
 	}
 
 	var subscriberTelemetry *InsertTelemetryParams
@@ -6084,7 +6210,7 @@ func (s *Service) requestUsesNonDeploymentCreds(ctx context.Context, headers htt
 }
 
 // enabledProvidersForRequest returns providers with resolvable credentials
-// for this request (deployment key, BYOK, or client-supplied header).
+// for this request (deployment key, BYOK, client header, or linked subscription).
 // surfaceProvider is the inbound wire-format's natural provider. A
 // client-supplied bearer header is treated as creds for that surface only —
 // never a licence to enable other OpenAI-compat upstreams sharing the same
@@ -6157,6 +6283,15 @@ func (s *Service) enabledProvidersForRequest(ctx context.Context, surfaceProvide
 				out[surfaceProvider] = struct{}{}
 			}
 		}
+	}
+	// Linked subscription pools provide credentials independently of the
+	// inbound harness's native bearer. Enroll their native provider lanes
+	// before applying installation exclusions and gateway exclusivity.
+	if managedSubscriptionEnrolled(ctx, subscriptions.ProviderClaude) && s.supportsSubscriptionTransport(providers.ProviderAnthropic) {
+		out[providers.ProviderAnthropic] = struct{}{}
+	}
+	if managedSubscriptionEnrolled(ctx, subscriptions.ProviderCodex) && !codexChatEndpoint(ctx) && s.supportsSubscriptionTransport(providers.ProviderOpenAI) {
+		out[providers.ProviderOpenAI] = struct{}{}
 	}
 	// Provider exclusions trump every enrollment path above: an excluded
 	// provider must not be served even when credentials exist for it. The
@@ -6633,6 +6768,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 	installationID := installationIDFromContext(ctx)
 	clientID := ClientIdentityFrom(ctx)
 
+	ctx = withSubscriptionOnlyWarningEcho(ctx, body)
 	strippedBody, stripErr := stripRoutingMarkerFromMessages(body)
 	if stripErr != nil {
 		log.Error("Failed to strip routing marker from OpenAI messages", "err", stripErr)
@@ -6931,6 +7067,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 	routeStart := time.Now()
 	routeCtx, routeSpan := startRoutingSpan(ctx, routeRequest)
 	routeRes, err := s.runTurnLoop(routeCtx, env, feats, apiKeyID, installationID, subAgentHint, r.Header, routeRequest)
+	defer routeRes.releaseCooldownProbes()
 	var escalationCapture *captureWriter
 	defer func() {
 		s.completeEscalation(ctx, routeRes, returnErr, escalationCapture, translate.EscalationResponseChat)
@@ -6954,6 +7091,9 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 		if len(routeRes.SessionStrikeReadmitModels) > 0 {
 			ctx = context.WithValue(ctx, SessionStrikeReadmitModelsContextKey{}, routeRes.SessionStrikeReadmitModels)
 		}
+	}
+	if len(routeRes.CooldownProbeDeniedModels) > 0 {
+		ctx = context.WithValue(ctx, SessionCooldownProbeDeniedModelsContextKey{}, routeRes.CooldownProbeDeniedModels)
 	}
 	routeRes.SuggestionMode = r.Header.Get("x-weave-suggestion-mode") == "true"
 	decision := routeRes.Decision
@@ -7130,7 +7270,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 			if !ok {
 				log.Info("Subscription-only request cannot be served on the subscription; refusing",
 					"requested_model", feats.Model, "external_id", externalID, "decision_provider", decision.Provider)
-				return ErrCreditsExhaustedSubscriptionUnavailable
+				return subscriptionOnlyUnavailable(ctx)
 			}
 			ctx = released
 		} else {
@@ -7151,7 +7291,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 	contentSink, contentCap := s.maybeCaptureResponse(ctx, clientSink)
 
 	marker := suppressMarkerIfRequested(ctx, r.Header, modelSelectionMarkerForRequest(ctx, routeRes, routingMarkerFor(routeRes), decision.Model, ""))
-	if warning := subscriptionOnlyWarningMarkerForRequest(ctx, r.Header, subscriptionOnlyWarningMarkerCodex); warning != "" {
+	if warning := subscriptionOnlyWarningMarkerForRequest(ctx, r.Header, codexSubscriptionOnlyWarnings); warning != "" {
 		marker = warning
 	}
 
@@ -7711,7 +7851,8 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 		!paidFallbackForbiddenForModel(ctx, decision.Model) &&
 		s.openaiFallbackKeyAvailable(ctx)
 	// OpenAI-compatible callers can route to Anthropic too; give their Claude
-	// subscription model-access rejection the same paid recovery as /v1/messages.
+	// subscription model-access and third-party refusals the same paid recovery
+	// as /v1/messages.
 	claudeRetryViable := decision.Provider == providers.ProviderAnthropic &&
 		servedOnSubscription(ctx) &&
 		!blindExperimentPassthroughActive(ctx) &&
@@ -7893,7 +8034,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 
 	claudeFailoverUsed := false
 	claudeRetryRan := false
-	if claudeRetryViable && !paidFallbackForbiddenForModel(ctx, decision.Model) && proxyErr != nil && !preludeBuf.Committed() && anthropicSubscriptionModelRejected(proxyErr) {
+	if claudeRetryViable && !paidFallbackForbiddenForModel(ctx, decision.Model) && proxyErr != nil && !preludeBuf.Committed() && (anthropicSubscriptionModelRejected(proxyErr) || anthropicSubscriptionThirdPartyRefused(proxyErr)) {
 		subCtx := subscriptionStatePaidRescueContext(withSuppressedClaudeSubscription(ctx), decision.Model)
 		subCtx = resolveAndInjectCredentials(subCtx, providers.ProviderAnthropic, decision.Model, r.Header)
 		subOpts := opts
@@ -7908,7 +8049,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 			log.Warn("Claude subscription failover: no fallback Anthropic binding available; surfacing the original error",
 				"model", decision.Model, "upstream_status", upstreamStatus(proxyErr))
 		default:
-			log.Warn("Claude subscription failover: subscription cannot access model, retrying on Weave credits",
+			log.Warn("Claude subscription failover: subscription rejected the turn, retrying on Weave credits",
 				"model", decision.Model,
 				"err", proxyErr,
 				"upstream_status", upstreamStatus(proxyErr),
@@ -8253,6 +8394,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 	}
 
 	s.recordTurnUsage(ctx, routeRes, finalProvider, decision.ServedIdentity(), in, out, cacheCreation, cacheRead, extractor.OutputLimitReached())
+	s.clearRecoveredCooldown(ctx, routeRes, decision.Model, proxyErr)
 
 	var subscriberSettlement subscriberSettlementState
 	if proxyErr == nil {
@@ -8476,6 +8618,7 @@ func (s *Service) ProxyOpenAIResponses(ctx context.Context, body []byte, w http.
 	if translate.FeedbackFooterSinceLastHumanTurnInResponses(body) {
 		ctx = context.WithValue(ctx, responsesFooterEchoedContextKey{}, true)
 	}
+	ctx = withSubscriptionOnlyWarningEcho(ctx, body)
 	nativeBody := body
 	conversionBody := body
 	var err error

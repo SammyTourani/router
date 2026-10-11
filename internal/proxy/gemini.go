@@ -186,6 +186,7 @@ func (s *Service) ProxyGeminiGenerateContent(ctx context.Context, body []byte, w
 	routeStart := time.Now()
 	routeCtx, routeSpan := startRoutingSpan(ctx, routeRequest)
 	routeRes, err := s.runTurnLoop(routeCtx, env, feats, apiKeyID, installationID, subAgentHint, r.Header, routeRequest)
+	defer routeRes.releaseCooldownProbes()
 	var escalationCapture *captureWriter
 	defer func() {
 		s.completeEscalation(ctx, routeRes, returnErr, escalationCapture, translate.EscalationResponseGemini)
@@ -209,6 +210,9 @@ func (s *Service) ProxyGeminiGenerateContent(ctx context.Context, body []byte, w
 		if len(routeRes.SessionStrikeReadmitModels) > 0 {
 			ctx = context.WithValue(ctx, SessionStrikeReadmitModelsContextKey{}, routeRes.SessionStrikeReadmitModels)
 		}
+	}
+	if len(routeRes.CooldownProbeDeniedModels) > 0 {
+		ctx = context.WithValue(ctx, SessionCooldownProbeDeniedModelsContextKey{}, routeRes.CooldownProbeDeniedModels)
 	}
 	routeRes.SuggestionMode = r.Header.Get("x-weave-suggestion-mode") == "true"
 	decision := routeRes.Decision
@@ -419,6 +423,7 @@ func (s *Service) ProxyGeminiGenerateContent(ctx context.Context, body []byte, w
 	// Persist last-turn usage to the pin row so the next turn's planner
 	// has cache-hit and output-limit evidence.
 	s.recordTurnUsage(ctx, routeRes, finalProvider, decision.ServedIdentity(), in, out, cacheCreation, cacheRead, extractor.OutputLimitReached())
+	s.clearRecoveredCooldown(ctx, routeRes, decision.Model, proxyErr)
 
 	var subscriberTelemetry *InsertTelemetryParams
 	if installationID != uuid.Nil {

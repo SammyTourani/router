@@ -137,6 +137,10 @@ const DemotionReasonUnrescuedStall DemotionReason = "unrescued_stall"
 // Unlike the other reasons the withdrawal is time-limited.
 const DemotionReasonRateLimited DemotionReason = "rate_limited"
 
+// DemotionReasonTransientFailure marks a rescued transient gateway failure
+// whose model is withdrawn only for the configured cooldown.
+const DemotionReasonTransientFailure DemotionReason = "transient_failure"
+
 // ActiveCooldowns returns the models whose cooldown in cooldowns has not yet
 // elapsed at now, sorted for deterministic exclusion order.
 func ActiveCooldowns(cooldowns map[string]time.Time, now time.Time) []string {
@@ -227,4 +231,19 @@ type CooldownStore interface {
 	// (overwriting an earlier cooldown for the same model) instead of
 	// appending it to DemotedModels. Same seeding and strategy guard.
 	ExpireAndCoolDownModel(ctx context.Context, expired Pin, model string, until time.Time, reason DemotionReason) error
+}
+
+// RecoveryProbeStore atomically admits one half-open request for a session/model
+// pair across router workers. The token makes release safe after lease expiry
+// and reacquisition by a later request.
+type RecoveryProbeStore interface {
+	// AcquireRecoveryProbe claims the probe for leaseFor, measured on the
+	// store's own clock so every worker agrees on when an abandoned lease frees.
+	AcquireRecoveryProbe(ctx context.Context, sessionKey [SessionKeyLen]byte, model string, token uuid.UUID, leaseFor time.Duration) (bool, error)
+	ReleaseRecoveryProbe(ctx context.Context, sessionKey [SessionKeyLen]byte, model string, token uuid.UUID) error
+	// ClearDemotionCooldown removes model from the (sessionKey, role) row's
+	// DemotionCooldowns after a successful probe, unless the stored expiry is
+	// later than observedUntil: a newer cooldown from a concurrent failure
+	// must survive the recovery that preceded it.
+	ClearDemotionCooldown(ctx context.Context, sessionKey [SessionKeyLen]byte, role, model string, observedUntil time.Time) error
 }

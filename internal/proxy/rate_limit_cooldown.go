@@ -13,8 +13,8 @@ import (
 	"weave-os/router/internal/router/sessionpin"
 )
 
-// DefaultRateLimitCooldownSeconds is how long a rescued 429 keeps the primary
-// arm out of a session's automatic selection when
+// DefaultRateLimitCooldownSeconds is how long a rescued transient upstream
+// failure keeps the primary arm out of automatic session selection when
 // ROUTER_RATE_LIMIT_COOLDOWN_SECONDS is unset.
 const DefaultRateLimitCooldownSeconds = 45
 
@@ -22,8 +22,8 @@ const DefaultRateLimitCooldownSeconds = 45
 // took, for the completion line. Nil (flag off) contributes no fields.
 type rateLimitTurn struct {
 	mu sync.Mutex
-	// cooldownUntil is the expiry written for this turn's rescued 429, zero
-	// when the turn demoted nothing or demoted permanently.
+	// cooldownUntil is the expiry written for this turn's rescued transient
+	// failure, zero when the turn demoted nothing or demoted permanently.
 	cooldownUntil time.Time
 	cooldownMs    int64
 	// retryAfterHonoured is true when a same-binding retry waited the
@@ -207,6 +207,22 @@ func harnessSafeModels(models []string, hasTools bool) []string {
 		}
 	}
 	return out
+}
+
+// expiredDemotionCooldowns is the complement of activeDemotionCooldowns: the
+// arms whose cooldown has lapsed and now need a recovery probe.
+func expiredDemotionCooldowns(cooldowns map[string]time.Time, now time.Time) map[string]time.Time {
+	var expired map[string]time.Time
+	for model, until := range cooldowns {
+		if now.Before(until) {
+			continue
+		}
+		if expired == nil {
+			expired = make(map[string]time.Time, len(cooldowns))
+		}
+		expired[model] = until
+	}
+	return expired
 }
 
 // cooldownsByExpiry lists the models in cooldowns soonest-to-recover first,

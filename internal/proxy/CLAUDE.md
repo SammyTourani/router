@@ -85,26 +85,35 @@ re-anchors, post-command continuations, band swap, sibling failover, the policy
  deadline default, and loop escalation — every path where the router
 picked the model. `forcedPinEligible` deliberately does not.
 
-**A rescued 429 is a cooldown, not a session-lifetime strike.** Under
-`transient_rate_limit` (default off), `maybeStrikeArmAfterRescuedFailure`
-records a rescued primary's buffered upstream 429 as
-`DemotionReasonRateLimited` with an expiry (`rate_limit_cooldown_seconds`,
-default 45) in `Pin.DemotionCooldowns`; committed-stream failures and non-429
-rescued failures stay permanent. `runTurnLoop` folds only *active* cooldowns
-into `AutomaticExcludedModels`, so an expired arm is scored and rescued again
-with no extra state change. Cooldowns are soft in one more way than the
-deployment exclusion: `rescueWalkOrReadmitCooling` appends cooling arms
-(soonest expiry first) *after* every healthy rescue candidate, so a session
-whose whole rescue pool is throttled readmits a cooling arm instead of
-surfacing the 429 — the arm that just 429'd is never re-served that turn.
-Readmission lifts *only* the cooldown: `readmittableCooldowns` drops a model
-that also carries a session-lifetime strike or cannot take the turn's images,
-and the deployment-wide automatic exclusion still holds in the second walk. The
-same flag makes the same-binding retry Retry-After-aware
-(`dispatch.ThrottlePolicy`: honour ≤10s, else go straight to rescue; 500ms then
-1.5s when the header is absent). Sessions under a gateway quota (prod 2026-09)
-died at 11 consecutive client-visible 429s because a burst-time rescue had
-permanently demoted the arm that recovered minutes later.
+**Rescued transient failures get a bounded cooldown, not a session-lifetime
+strike.** Under `transient_rate_limit` (default off),
+`maybeStrikeArmAfterRescuedFailure` records a rescued primary's buffered 429 as
+`DemotionReasonRateLimited`, and 502/503/504 as
+`DemotionReasonTransientFailure`, with an expiry
+(`rate_limit_cooldown_seconds`, default 45) in `Pin.DemotionCooldowns`;
+committed-stream failures and other rescued failures stay permanent.
+`runTurnLoop` folds only *active* cooldowns into `AutomaticExcludedModels`.
+At expiry, a Postgres lease grants the recovery probe to one in-flight request
+per session/model across router workers; concurrent requests use their other
+candidates, and the request's remaining expired arms stay excluded for that
+turn. A lease token prevents a delayed release from clearing a newer probe;
+abandoned leases expire after 15 minutes, or one minute after a known request
+deadline, measured on the database clock. A probe that completes without an
+upstream error clears its cooldown from both stored rows unless a newer
+cooldown has replaced it, so a recovered arm needs no further leases. Cooldowns
+are soft in one more way than the deployment exclusion:
+`rescueWalkOrReadmitCooling` appends cooling arms (soonest expiry first)
+*after* every healthy rescue candidate, so a session whose whole rescue pool is
+throttled readmits a cooling arm instead of surfacing the 429 — the arm that
+just 429'd is never re-served that turn. Readmission lifts *only* the cooldown:
+`readmittableCooldowns` drops a model that also carries a session-lifetime
+strike or cannot take the turn's images, and the deployment-wide automatic
+exclusion still holds in the second walk. The same flag makes the same-binding
+retry Retry-After-aware (`dispatch.ThrottlePolicy`: honour ≤10s, else go
+straight to rescue; 500ms then 1.5s when the header is absent). Sessions under
+a gateway quota (prod 2026-09) died at 11 consecutive client-visible 429s
+because a burst-time rescue had permanently demoted the arm that recovered
+minutes later.
 
 **A session-lifetime strike is soft for rescue too, as the very last resort.**
 Primary selection already treats a demotion as soft (an emptied pool reroutes
@@ -302,9 +311,13 @@ Multi-binding models (deepseek/qwen/moonshot with Fireworks/Makora/Bedrock prima
 
 **Codex subscription failover ([`codex_failover.go`](codex_failover.go)).** A turn served on the caller's ChatGPT plan resolves to one credential, so when that plan's window binds (`429 {"type":"usage_limit_reached"}`, or `insufficient_quota` on a spent workspace) there is no binding to walk and Codex renders the raw upstream error (prod `cd5657ee`: three attempts on the same dark destination, `failover_used=false`). The Anthropic analogue in `ProxyMessages`, ported to `ProxyOpenAIChatCompletion` (and therefore `/v1/responses`): pre-commit, `withSuppressedCodexSubscription` drops the spent token so credential resolution falls through to the deployment/BYOK OpenAI key, and the SAME model is re-dispatched once — the plan rolls over to Weave credits instead of failing the turn. The rejection is also recorded in the usage observer (`recordCodexQuotaExhaustion`), which the quota headers can't do because the error response carries none; without it every later turn re-buys the same rejected round-trip until the window resets, so `codexSubscriptionExhausted` suppresses the token pre-dispatch until the upstream-reported `resets_at`. Triggers are the quota rejection, any other retryable fault, a rejected OAuth token (401/403), and an explicit model-availability rejection (`codexSubscriptionModelRejected`: `model_not_found`/`unsupported_model`/`model_not_available`, or `param: "model"` on a 400/404). A catalog model outside the native Codex roster but marked `CodexSubscriptionFallback` tries the personal or managed Codex subscription first under the same model and falls back here when the plan refuses it; a managed account that refuses the model is denied for that model only, not disabled. Gated on a fallback OpenAI key actually existing (`openaiFallbackKeyAvailable`) — otherwise the subscription is kept rather than dispatching with no credential — and skipped for subscription-only balances, where paid spend is exactly what the caller forbade. Suppression is Codex-scoped: a Claude subscription on the same request is untouched. It carries forward to post-dispatch credential re-resolution only once the retry succeeded, so `cost.subscription_served` and the billing key name the key that actually paid.
 
+**Claude subscription third-party refusal ([`subscription_third_party.go`](subscription_third_party.go)).** Anthropic serves only Claude Code on a subscription's plan limits; other clients (OpenCode on a linked Claude Max seat, 2026-10-09) get `400 invalid_request_error` "Third-party apps now draw from your extra usage, not your plan limits", even though the router already injects the Claude Code identity system block. The 400 is neither retryable nor an OAuth rejection, so it used to reach the client raw. `anthropicSubscriptionThirdPartyRefused` matches it narrowly (status, type, and message) and joins the subscription failover triggers: the inbound-bearer retry in `ProxyMessages`, the usage bypass, the subscription-state target walk, and managed-pool rotation. A refused managed account is denied for that `client_app` only, for `subscriptionThirdPartyDenialTTL`; it is not cooled down or marked reconnect-required, because Claude Code traffic on the same seat keeps working. The router does not try to look like Claude Code beyond the identity block (e.g. by forging the `x-anthropic-billing-header` attestation): the classification is Anthropic's billing policy, so the fix is to fail over, not to evade it.
+
 **Single-binding same-binding retry.** Most catalog models carry one binding (Anthropic/OpenAI/Google), so cross-binding failover has nowhere to walk — a sole-provider 5xx/timeout would kill the request. For these, `dispatchWithFallback` retries the *same* binding in place up to `maxSameBindingRetries` (2) with exponential backoff (`sameBindingBackoff`: 250ms, 500ms), pre-commit only, abortable on ctx cancel (`sleepWithContext`). Multi-binding models skip in-place retry (`len(bindings) > 1` breaks the inner loop) and fail straight over to the next provider — a different upstream beats re-hitting the flaky one. Tests inject `Service.retrySleep` to keep the backoff instant.
 
-**Retries are bounded twice: count AND wall-clock.** `maxSameBindingRetries` caps how many attempts; `sameBindingRetryBudget` (10s) caps how much time they may consume in total. The count alone bounds attempts but not cost — an upstream that accepts the stream and never answers burns a full `ResponseHeaderTimeout` (30s) per attempt, so three of them spend ~90s on a request that was never going to be served (prod 2026-08-26: a gateway hanging deterministically on tool-result turns, where every retry re-sent the identical payload). A transient blip clears on a *quick* retry by definition, so an attempt series that already outran the budget is not the fault class in-place retry was built for; cheap failures (5xx in milliseconds) still get the full attempt count. The budget stopping a retry logs at WARN with `spent_ms`/`budget_ms` — without it, a hang and a blip are indistinguishable in the logs. Tests inject `Service.now` to simulate a slow attempt without burning real time; express the simulated duration as an absolute value, never as a multiple of `sameBindingRetryBudget`, or the test scales with the constant and can never fail.
+**Retries are bounded twice: count AND wall-clock.** `maxSameBindingRetries` caps how many attempts; the executor's 10s wall-clock budget (mirrored for subscription accounts by `subscriptionRotationBudget`) caps how much time they may consume in total. The count alone bounds attempts but not cost — an upstream that accepts the stream and never answers burns a full `ResponseHeaderTimeout` (30s) per attempt, so three of them spend ~90s on a request that was never going to be served (prod 2026-08-26: a gateway hanging deterministically on tool-result turns, where every retry re-sent the identical payload). A transient blip clears on a *quick* retry by definition, so an attempt series that already outran the budget is not the fault class in-place retry was built for; cheap failures (5xx in milliseconds) still get the full attempt count. The budget stopping a retry logs at WARN with `spent_ms`/`budget_ms` — without it, a hang and a blip are indistinguishable in the logs. Tests inject `Service.now` to simulate a slow attempt without burning real time; express the simulated duration as an absolute value, never as a multiple of `subscriptionRotationBudget`, or the test scales with the constant and can never fail.
+
+**The subscription rotation budget admits attempts; it never cancels one.** `subscriptionRotationBudget` (10s) is shared across one request's account rotation, executor re-entry, and model-alternative walks (`dispatchSubscriptionAlternatives`, `dispatchSubscriptionStateModels`). It bounds credential leasing (`withSubscriptionRotationDeadline`) and whether another included attempt may start. An attempt admitted inside the window runs under the caller's context until it succeeds, the provider's own header/idle/stall watchdog fires, or the caller cancels: a large-history Claude turn can legitimately take longer than ten seconds to emit its first byte, and canceling it surfaced as a client 502 with no upstream status (prod 2026-10). After expiry, `afterSubscriptionRotationBudget` serves the same model on an authorized paid key when funding permits, on the live caller context; otherwise the request ends with the attempt's own error, or `ErrSubscriptionPoolExhausted` when no attempt started. Budget expiry alone never cools down, exhausts, or denies an account, and an attempt's own error — not elapsed time — decides whether a state-model walk may try another target. Caller cancellation is terminal: no further subscription or paid attempt.
 
 **Native streams must end on a terminal event.** A provider adapter returns nil on a clean EOF after a 2xx, so a native passthrough the upstream closed mid-turn would otherwise be recorded as served. Native Anthropic (`message_stop`), OpenAI chat (`finish_reason` or `[DONE]`) and Responses (`response.completed`/`incomplete`/`failed`) streams are watched by [`streamTerminalObserver`](stream_terminal_observer.go) and `responsesTerminalObserver`; an upstream-declared failure also counts as an end (Anthropic/Responses `error` event, a chat chunk carrying an `error` object, `response.failed`). Chat with `n > 1` ends only when every choice that emitted has finished or on `[DONE]`; a keepalive-only stream never started; a truncated final frame is not a terminal; an unframed body is not judged. A missing terminal becomes `translate.ErrStreamEmpty` (never started) or `translate.ErrStreamIncomplete`: pre-commit both are retryable like any transport fault, post-commit they take the normal in-stream error path, and `error_class` records `stream_cut`. Telemetry's `failover_used` marks a turn a rescue served; `failover_attempted` marks one where a baseline, subscription or sibling rescue was dispatched, served or not.
 

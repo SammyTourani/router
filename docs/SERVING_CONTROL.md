@@ -412,8 +412,9 @@ invalidation. Missed delivery falls back to TTL expiry.
 ## Local verification
 
 Managed admission is enabled by `ROUTER_SERVING_TARGET`. Bootstrap validates exact
-worker image, revision, configuration and all profile lanes. `/startupz` and
-`/readyz` retain worker bootstrap/database/strategy checks; exact proposal validation
+worker image, revision, configuration and all profile lanes. `/startupz` becomes
+available after initialization; `/livez` is the process responsive check.
+`/readyz` retains database/strategy diagnostics; exact proposal validation
 uses the internal service token in addition to Cloud Run identity. The classifier
 remains IAM-private. Request limits, capacity permits and streaming deadlines are
 owned by the worker.
@@ -626,5 +627,16 @@ calls. Each reasoning model uses its least supported declared effort; GPT-5.4 Pr
 uses `medium`. The tool continues across failures and reports them together.
 Deployment owners can explicitly execute against each isolated fleet with
 `ROUTER_WARMUP_API_KEY` and `-execute -origin <fleet-origin>`; this incurs live
-inference costs. No warmup was executed during implementation. Wire this tool
-into private warmup automation before cutover; do not narrow warmup to one model.
+inference costs and is separate from service startup.
+
+Startup loads required artifacts and clients, then prepares database/provider
+connections before listening. Provider preparation sends credential-free HEAD
+requests through retained transports to exercise DNS/TCP/TLS; any HTTP response
+proves connectivity only. Provider preparation is bounded and warns on failure
+without aborting boot. `/startupz` requires a successful PostgreSQL ping within
+two seconds on each request, returning 503 while the database is unreachable
+and permitting startup once it recovers. The process stays running during a
+database outage; `/livez` remains independent of all dependencies.
+Startup performs no synthetic generation, embedding or HMM
+inference, and does not establish a first-inference latency guarantee.
+Probes never repeat artifact initialization or perform inference.

@@ -85,13 +85,6 @@ func main() {
 		logger.Error("Invalid startup egress configuration; refusing to boot", "err", err)
 		panic(err)
 	}
-	egressCtx, stopEgress := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	err = egressProbe.wait(egressCtx, logger)
-	stopEgress()
-	if err != nil {
-		logger.Error("Startup outbound connectivity failed; refusing to boot", "err", err)
-		panic(err)
-	}
 	// Initialize propagation and APM before constructing HTTP clients so their
 	// OpenTelemetry transports capture the configured providers and propagator.
 	apm.Init()
@@ -143,12 +136,12 @@ func main() {
 	defer pool.Close()
 
 	// pgxpool connects lazily; first request otherwise pays to build the pool inside
-	// its own budget. Bounded and warn-only so an unreachable DB can't stall boot.
+	// its own budget. Failure keeps /startupz unsuccessful until the DB recovers.
 	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	pingErr := pool.Ping(pingCtx)
 	pingCancel()
 	if pingErr != nil {
-		logger.Warn("Postgres ping at boot failed; early requests may be slow", "err", pingErr)
+		logger.Warn("Postgres ping at boot failed; startup probe requires database connectivity", "err", pingErr)
 	}
 
 	// Gates the self-hoster dashboard + /admin/v1/* API. Defaults to selfhosted
@@ -1552,7 +1545,19 @@ func main() {
 		}
 		testPlans = &policyregistry.TestPlanTools{Repository: servingpostgres.NewTestPlanRepo(pool), Store: servingAdmission.Store, Clock: time.Now}
 	}
+	initializedOrigins := make(map[string]struct{})
+	if os.Getenv("PUBSUB_EMULATOR_HOST") == "" {
+		initializedOrigins["https://pubsub.googleapis.com"] = struct{}{}
+	}
+	if managedServingEnabled(deploymentMode) || policyEnvironmentRaw != "" {
+		initializedOrigins["https://storage.googleapis.com"] = struct{}{}
+	}
+	processCtx, stopProcess := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopProcess()
+	egressProbe.prepare(processCtx, logger, providerMap, envKeyedProviders, initializedOrigins)
+	logger.Info("Router startup initialization complete")
 	serverFeatures := server.Features{
+		StartupDatabasePing: pool.Ping,
 		TestPlans:           testPlans,
 		PolicyPinEnabled:    policyPinEnabled,
 		ServingAdmission:    servingAdmission,
@@ -1592,9 +1597,6 @@ func main() {
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-
 	select {
 	case err := <-serverErr:
 		logger.Error("Server exited with error", "err", err)
@@ -1604,8 +1606,8 @@ func main() {
 		defer apmFailCancel()
 		apm.ShutdownWithContext(apmFailCtx)
 		return
-	case sig := <-stop:
-		logger.Info("Received shutdown signal; draining", "signal", sig.String())
+	case <-processCtx.Done():
+		logger.Info("Received shutdown signal; draining")
 	}
 
 	// Cloud Run gives 10s between SIGTERM and SIGKILL; budget across three
@@ -1731,7 +1733,6 @@ func buildClusterScorer(availableProviders map[string]struct{}) (router.Router, 
 		}
 	}
 	scorers := make(map[string]*cluster.Scorer, len(versions))
-	warmed := make(map[string]cluster.Embedder)
 	var defaultEmbedderID string
 	for _, v := range versions {
 		bundle, err := cluster.LoadBundle(v)
@@ -1772,7 +1773,6 @@ func buildClusterScorer(availableProviders map[string]struct{}) (router.Router, 
 			logger.Warn("Cluster scorer version skipped; embedder unavailable", "cluster_version", v, "embedder", bundle.EmbedderID(), "err", err)
 			continue
 		}
-		warmed[embedder.ID()] = embedder
 
 		scorer, err := cluster.NewScorer(bundle, cfg, embedder, availableProviders)
 		if err != nil {
@@ -1801,33 +1801,6 @@ func buildClusterScorer(availableProviders map[string]struct{}) (router.Router, 
 		"requested_version", requestedVersion,
 		"build_all_versions", buildAll,
 	)
-
-	// Warmup: burn each embedder's lazy ONNX graph-optimization cost at boot.
-	for id, embedder := range warmed {
-		type warmupResult struct {
-			err error
-		}
-		warmupDone := make(chan warmupResult, 1)
-		go func(e cluster.Embedder) {
-			_, err := e.Embed(context.Background(), "warmup")
-			warmupDone <- warmupResult{err: err}
-		}(embedder)
-		select {
-		case res := <-warmupDone:
-			if res.err != nil {
-				_ = embedders.Close()
-				return nil, "", fmt.Errorf("Warm embedder %q: %w", id, res.err)
-			}
-		case <-time.After(15 * time.Second):
-			// Drain the goroutine before closing to avoid use-after-free.
-			go func() {
-				<-warmupDone
-				_ = embedders.Close()
-			}()
-			return nil, "", fmt.Errorf("Cluster embedder %q warmup timed out after 15s", id)
-		}
-		logger.Info("Cluster embedder warmed", "embedder", id, "embed_dim", embedder.Dim())
-	}
 
 	return multi, defaultEmbedderID, nil
 }
