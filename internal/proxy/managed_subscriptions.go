@@ -66,6 +66,7 @@ type ManagedSubscriptionUsage struct {
 	SubscriptionTier      auth.SubscriptionTier
 	IntendedModel         string
 	AttemptedAccounts     map[string]struct{}
+	ClientAppRefused      bool
 	Finished              bool
 	WinningCredentials    *Credentials
 }
@@ -258,6 +259,7 @@ func (s *Service) leaseManagedSubscription(ctx context.Context, provider, model 
 		}
 		seen[lease.AccountID] = true
 		if poolProvider == subscriptions.ProviderClaude && s.subscriptionModels.managedClientAppDenied(lease.AccountID, provider, ClientIdentityFrom(ctx).ClientApp, s.clockNow()) {
+			markSubscriptionClientAppRefused(ctx)
 			lease.Release()
 			owner.ExcludedAccountIDs = append(owner.ExcludedAccountIDs, lease.AccountID)
 			continue
@@ -345,6 +347,7 @@ func (s *Service) recordManagedSubscriptionFailure(ctx context.Context, provider
 	if provider == providers.ProviderAnthropic && anthropicSubscriptionThirdPartyRefused(attemptErr) {
 		clientApp := ClientIdentityFrom(ctx).ClientApp
 		s.subscriptionModels.denyManagedClientApp(lease.AccountID, provider, clientApp, s.clockNow().Add(subscriptionThirdPartyDenialTTL))
+		markSubscriptionClientAppRefused(ctx)
 		observability.FromContext(ctx).Warn("Managed subscription account refused third-party client on plan limits",
 			"provider", poolProvider, "account_id", lease.AccountID, "client_app", clientApp)
 		return true

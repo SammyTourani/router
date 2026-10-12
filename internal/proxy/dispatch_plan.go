@@ -196,6 +196,10 @@ func (s *Service) dispatchPlanned(ctx context.Context, in failoverInputs, plan i
 				}
 				usage.AttemptedAccounts[lease.AccountID+"\x00"+decision.Model] = struct{}{}
 			}
+			if forcedClaudeClientAppRefused(ctx, decision, CredentialsFromContext(credentialCtx)) {
+				lease.Release()
+				return dispatchAbort{err: ErrSubscriptionClientAppRefused}
+			}
 			if creds := CredentialsFromContext(credentialCtx); paidFallbackForbidden(ctx) && (creds == nil || !creds.OAuth) {
 				lease.Release()
 				return dispatchAbort{err: subscriptionOnlyUnavailable(ctx)}

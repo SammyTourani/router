@@ -13,6 +13,7 @@ import (
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/router/catalog"
 	"weave-os/router/internal/subscriptions"
+	"weave-os/router/internal/translate"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,12 +71,17 @@ func TestAnthropicSubscriptionThirdPartyRefused(t *testing.T) {
 
 func dispatchManagedThirdPartyTurn(t *testing.T, svc *Service, ctx context.Context) (*httptest.ResponseRecorder, error) {
 	t.Helper()
+	return dispatchManagedThirdPartyTurnWithReason(t, svc, ctx, "")
+}
+
+func dispatchManagedThirdPartyTurnWithReason(t *testing.T, svc *Service, ctx context.Context, reason string) (*httptest.ResponseRecorder, error) {
+	t.Helper()
 	recorder := httptest.NewRecorder()
 	buffer := newPreludeBuffer(recorder)
 	_, err := svc.dispatchWithFallback(ctx, failoverInputs{
 		w:               recorder,
 		buf:             buffer,
-		initialDecision: router.Decision{Model: parityAnthropicModel, Provider: providers.ProviderAnthropic},
+		initialDecision: router.Decision{Model: parityAnthropicModel, Provider: providers.ProviderAnthropic, Reason: reason},
 		purpose:         inference.PurposeAnthropicMessages,
 		bindings:        []catalog.ProviderBinding{{Provider: providers.ProviderAnthropic}},
 		attempt: func(ctx context.Context, decision router.Decision, client providers.Client) error {
@@ -181,4 +187,27 @@ func TestSubscriptionThirdPartyRefusalRescuesOpenAIIngress(t *testing.T) {
 	assert.NotContains(t, recorder.Body.String(), "Third-party apps")
 	assert.Equal(t, 1, upstream.subDispatches)
 	assert.Equal(t, 1, upstream.paidDispatches)
+}
+
+func TestDispatchWithFallbackRejectsPaidFallbackForForcedThirdPartyRefusal(t *testing.T) {
+	leaser := &scriptedSubscriptionLeaser{
+		leases:     []subscriptions.Lease{{AccountID: "opaque-a", AccessToken: "token-a"}},
+		repeatLast: true,
+	}
+	upstream := &parityUpstream{subErr: thirdPartyRefusalError(), okBody: "served"}
+	svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderAnthropic: upstream}).
+		WithManagedSubscriptions(leaser).
+		WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}})
+	svc.retrySleep = noopSleep
+
+	for range 2 {
+		_, err := dispatchManagedThirdPartyTurnWithReason(t, svc, clientAppContext(managedSubscriptionTestContext(), ClientAppOpencode), translate.ReasonUserForceModel)
+		require.ErrorIs(t, err, ErrSubscriptionClientAppRefused)
+		cls, ok := ClassifyDispatchError(err)
+		require.True(t, ok)
+		assert.Equal(t, http.StatusForbidden, cls.Status)
+	}
+
+	assert.Equal(t, 1, upstream.subDispatches, "the refused account is skipped for this client app on later turns")
+	assert.Zero(t, upstream.paidDispatches, "a forced Claude turn must not bill paid API for a refused third-party client")
 }
