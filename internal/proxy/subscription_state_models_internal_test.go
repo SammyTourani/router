@@ -38,7 +38,14 @@ type stateModelRouter struct{}
 func (stateModelRouter) Route(_ context.Context, req router.Request) (router.Decision, error) {
 	resolver := policy.NewResolver(modelSet([]string{stateClaudeModel, stateCodexModel, statePaidModel}), nil, func(model catalog.Model) string { return model.ID }, policy.ProviderPolicy{})
 	eligible := modelSet(resolver.Resolve(req).CandidateModels())
-	for _, model := range []string{stateClaudeModel, stateCodexModel, statePaidModel} {
+	orderedModels := append([]string(nil), req.PreferredModels...)
+	orderedModels = append(orderedModels, stateClaudeModel, stateCodexModel, statePaidModel)
+	seen := make(map[string]struct{}, len(orderedModels))
+	for _, model := range orderedModels {
+		if _, duplicate := seen[model]; duplicate {
+			continue
+		}
+		seen[model] = struct{}{}
 		if _, admitted := eligible[model]; admitted {
 			entry, _ := catalog.ByID(model)
 			for _, binding := range entry.Providers {
@@ -82,7 +89,7 @@ func TestSubscriptionStateModelsFundingOrder(t *testing.T) {
 		{name: "both exhausted use cheap paid set", want: statePaidModel},
 		{name: "live Claude exhaustion rotates to Codex", claude: true, codex: true, liveReject: true, want: stateCodexModel},
 		{name: "live exhaustion uses cheap paid set", claude: true, liveReject: true, want: statePaidModel},
-		{name: "empty exhausted set refuses paid", emptyPaid: true, wantErr: true},
+		{name: "empty inactive preferences allow ordinary paid routing", emptyPaid: true, want: statePaidModel},
 		{name: "explicit force cannot buy an active-only model", forced: true, wantErr: true},
 		{name: "explicit force still uses included capacity", forced: true, claude: true, want: stateClaudeModel},
 		{name: "readmitted force pin survives state request rebuild", forcedPin: true, forceWithRequestSubset: true, claude: true, want: stateClaudeModel},
@@ -362,10 +369,6 @@ func TestSubscriptionStateModelsProtectPaidSummaries(t *testing.T) {
 	fake := &fakeHandoverProvider{respBody: canonicalAnthropicResponse, respStatus: http.StatusOK}
 	summarizer := newTestSummarizer(t, fake, "", time.Second)
 	ctx := conditionalModelsContext([]string{policy.HandoverSummaryDefaultModel}, []string{statePaidModel})
-	_, _, err = summarizer.Summarize(ctx, env, router.Request{})
-	require.Error(t, err)
-	require.Zero(t, fake.calls)
-	ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenInactiveContextKey{}, []string{policy.HandoverSummaryDefaultModel})
 	text, _, err := summarizer.Summarize(ctx, env, router.Request{})
 	require.NoError(t, err)
 	require.Equal(t, "Refactor in progress: step 1 done, step 2 pending.", text)
@@ -381,18 +384,18 @@ func TestSubscriptionStateModelsEmptySelectedStateFailsClosed(t *testing.T) {
 	require.False(t, modelPermittedByAllowlist(ctx, stateClaudeModel))
 }
 
-func TestSubscriptionStatePaidRescueRequiresExhaustedSetTarget(t *testing.T) {
+func TestSubscriptionPreferencesDoNotRestrictFundedModels(t *testing.T) {
 	ctx := conditionalModelsContext([]string{stateClaudeModel, stateCodexModel}, []string{statePaidModel})
-	require.True(t, paidFallbackForbidden(ctx))
+	require.False(t, paidFallbackForbidden(ctx))
 	require.False(t, paidFallbackForbiddenForModel(ctx, statePaidModel))
-	require.True(t, paidFallbackForbiddenForModel(ctx, stateClaudeModel))
-	require.Equal(t, []router.Decision{{Model: statePaidModel}}, subscriptionStatePaidRescueDecisions(ctx, []router.Decision{
+	require.False(t, paidFallbackForbiddenForModel(ctx, stateClaudeModel))
+	require.Equal(t, []router.Decision{{Model: stateClaudeModel}, {Model: statePaidModel}, {Model: stateCodexModel}}, subscriptionStatePaidRescueDecisions(ctx, []router.Decision{
 		{Model: stateClaudeModel}, {Model: statePaidModel}, {Model: stateCodexModel},
 	}))
 
 	allowedRescueCtx := subscriptionStatePaidRescueContext(ctx, statePaidModel)
 	require.False(t, paidFallbackForbidden(allowedRescueCtx))
-	require.True(t, paidFallbackForbidden(subscriptionStatePaidRescueContext(ctx, stateClaudeModel)))
+	require.False(t, paidFallbackForbidden(subscriptionStatePaidRescueContext(ctx, stateClaudeModel)))
 }
 
 func TestSubscriptionStateModelsKeepSafetyExclusions(t *testing.T) {
