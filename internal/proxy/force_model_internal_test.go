@@ -527,3 +527,53 @@ func TestForceModelExamples_AreResolvable(t *testing.T) {
 		assert.True(t, known, "example %q", example)
 	}
 }
+
+func TestSuggestForceModel(t *testing.T) {
+	tests := []struct{ input, want string }{
+		{"opsu", "opus"},
+		{"opuis", "opus"},
+		{"opues-5.5", "opus-5-5"},
+		{"gtp-6-sol", "gpt-6-sol"},
+		{"sool", "sol"},
+		{"sokl", "sol"},
+		{"astar", "astra"},
+		{"gpt-61.-sol", "gpt-6.1-sol"},
+		{"sonet", "sonnet"},
+		{"gemni", "gemini"},
+		{"opsu:high", "opus:high"},
+		// A different version number is a different model, not a typo.
+		{"gpt-6-1", ""},
+		{"gpt-5.6-astra", ""},
+		{"haiku-4.6", ""},
+		{"qwen/qwen3-32b", ""},
+		{"fix the tests", ""},
+		{"opus high help", ""},
+		{"zzzz", ""},
+		{"ab", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			assert.Equal(t, tt.want, suggestForceModel(tt.input))
+		})
+	}
+}
+
+// A hint is only useful if typing it pins a model; it must never name
+// something /force-model would reject.
+func TestSuggestForceModel_SuggestionsResolve(t *testing.T) {
+	for _, input := range []string{
+		"opsu", "opuis", "opues-5.5", "gtp-6-sol", "sool", "sokl", "astar", "gpt-61.-sol",
+		"sol.", "opus-5-", "kimi-k", "gpt-", "sonet", "gemni", "opsu:high", "haiku-45", "glm5.3x",
+	} {
+		t.Run(input, func(t *testing.T) {
+			_, _, inputKnown, _ := resolveForceModelWithEffort(input)
+			require.False(t, inputKnown, "input must be unknown for a hint to apply")
+			s := suggestForceModel(input)
+			if s == "" {
+				return
+			}
+			_, _, known, _ := resolveForceModelWithEffort(s)
+			assert.True(t, known, "suggestion %q must resolve", s)
+		})
+	}
+}
