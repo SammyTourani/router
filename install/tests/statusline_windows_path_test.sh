@@ -7,22 +7,23 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+command -v jq >/dev/null 2>&1 || { echo "statusline_windows_path_test: jq is required" >&2; exit 1; }
 
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+fixture_dir="$(mktemp -d)"
+trap 'rm -rf "$fixture_dir"' EXIT
 
-mkdir -p "$work/bin" "$work/weave"
+mkdir -p "$fixture_dir/bin" "$fixture_dir/weave"
 printf '%s\n' '#!/bin/sh' \
   '[ "$1" = "-m" ] && [ "$2" = "--" ] || exit 2' \
-  'case "$3" in /c/*) printf "C:%s\n" "${3#/c}" ;; *) printf "%s\n" "$3" ;; esac' >"$work/bin/cygpath"
-chmod +x "$work/bin/cygpath"
-mkdir -p "$work/broken-bin"
-printf '%s\n' '#!/bin/sh' 'exit 127' >"$work/broken-bin/cygpath"
-chmod +x "$work/broken-bin/cygpath"
+  'case "$3" in /c/*) printf "C:%s\n" "${3#/c}" ;; *) printf "%s\n" "$3" ;; esac' >"$fixture_dir/bin/cygpath"
+chmod +x "$fixture_dir/bin/cygpath"
+mkdir -p "$fixture_dir/broken-bin"
+printf '%s\n' '#!/bin/sh' 'exit 127' >"$fixture_dir/broken-bin/cygpath"
+chmod +x "$fixture_dir/broken-bin/cygpath"
 
 posix_command="/c/Users/dev/.weave/cc-statusline.sh"
-script_path="$work/weave/cc-statusline.sh"
-settings="$work/settings.json"
+script_path="$fixture_dir/weave/cc-statusline.sh"
+settings="$fixture_dir/settings.json"
 printf '{"statusLine":{"type":"command","command":"C:/Users/dev/.weave/cc-statusline.sh"}}\n' >"$settings"
 printf '#!/usr/bin/env bash\n# Claude Code statusline for the Weave Router.\n' >"$script_path"
 
@@ -43,17 +44,17 @@ for script in install.sh uninstall.sh; do
   eval "$(awk '/^claude_statusline_router_owned\(\)/,/^}/' "$script_dir/../$script")"
 
   rc=0
-  PATH="$work/bin:$PATH" claude_statusline_router_owned \
+  PATH="$fixture_dir/bin:$PATH" claude_statusline_router_owned \
     "$settings" "$posix_command" "$script_path" "$script_path.weave-router" || rc=$?
   check "$script owns a C:/ statusline command when \$HOME is /c/" "0" "$rc"
 
   rc=0
-  PATH="$work/bin:$PATH" claude_statusline_router_owned \
+  PATH="$fixture_dir/bin:$PATH" claude_statusline_router_owned \
     "$settings" "/c/Users/other/.weave/cc-statusline.sh" "$script_path" "$script_path.weave-router" || rc=$?
   check "$script still rejects a different statusline path" "1" "$rc"
 
   rc=0
-  PATH="$work/broken-bin:$PATH" claude_statusline_router_owned \
+  PATH="$fixture_dir/broken-bin:$PATH" claude_statusline_router_owned \
     "$settings" "$posix_command" "$script_path" "$script_path.weave-router" || rc=$?
   check "$script does not claim ownership when cygpath fails" "1" "$rc"
 done
