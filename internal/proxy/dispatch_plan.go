@@ -352,6 +352,9 @@ func (s *Service) afterSubscriptionRotationBudget(ctx context.Context, in failov
 		"budget_ms", subscriptionRotationBudget.Milliseconds(),
 		"subscription_account_attempt", subscriptionAttempts,
 		"err", rotationErr)
+	if forcedClaudeClientAppRefused(ctx, decision, nil) {
+		return ErrSubscriptionClientAppRefused
+	}
 	poolProvider, subscriptionProvider := managedSubscriptionProviderFromUpstream(decision.Provider, decision.Model)
 	if !subscriptionProvider || subscriptionAttemptOnly(ctx) || paidFallbackForbidden(ctx) || !s.managedProviderFallbackAvailable(ctx, poolProvider) {
 		return rotationErr

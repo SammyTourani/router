@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"weave-os/router/internal/auth"
 	"weave-os/router/internal/inference"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/router"
@@ -210,4 +211,29 @@ func TestDispatchWithFallbackRejectsPaidFallbackForForcedThirdPartyRefusal(t *te
 
 	assert.Equal(t, 1, upstream.subDispatches, "the refused account is skipped for this client app on later turns")
 	assert.Zero(t, upstream.paidDispatches, "a forced Claude turn must not bill paid API for a refused third-party client")
+}
+
+func TestRotationBudgetPaidRescueRejectsForcedThirdPartyRefusal(t *testing.T) {
+	leaser := &scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "opaque-a", AccessToken: "token-a"}}}
+	svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderAnthropic: &fakeClient{name: providers.ProviderAnthropic}}).
+		WithManagedSubscriptions(leaser).
+		WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}})
+	ctx := expiredRotationContext(auth.SubscriptionProviderClaude)
+	markSubscriptionClientAppRefused(ctx)
+	rec := httptest.NewRecorder()
+	buf := newPreludeBuffer(rec)
+	in := plannedInputs(rec, buf, []catalog.ProviderBinding{{Provider: providers.ProviderAnthropic}}, nil)
+	in.initialDecision = router.Decision{Provider: providers.ProviderAnthropic, Model: parityAnthropicModel, Reason: translate.ReasonUserForceModel}
+	var apiCalls int
+	in.attempt = func(attemptCtx context.Context, _ router.Decision, _ providers.Client) error {
+		if creds := CredentialsFromContext(attemptCtx); creds == nil || !creds.OAuth {
+			apiCalls++
+		}
+		return nil
+	}
+
+	_, err := svc.dispatchWithFallback(ctx, in)
+
+	require.ErrorIs(t, err, ErrSubscriptionClientAppRefused)
+	assert.Zero(t, apiCalls, "the rotation-budget paid rescue must not serve a forced Claude turn the subscriptions refused")
 }
