@@ -57,7 +57,7 @@ collapse them.
 | `global_automatic_routing_exclusions` | deployment | fail-open (soft) | `AutomaticExcludedModels`: scorer, policy resolver, and every automatic-pin gate |
 | `cluster_model_lists` | API key (org default) | fail-open | `policy.ApplyClusterArmOverrides` |
 | `model_router_user_cluster_model_lists` | router user | fail-open | same, after `mergeClusterOverrides` |
-| subscription capacity | verified account owner + installation membership | fail-closed | primary candidate admission; personal then sharing; native OAuth support and quota/overage checks |
+| subscription capacity | verified account owner + installation membership (personal keys); live installation-shared key | fail-closed | primary candidate admission; personal then sharing; native OAuth support and quota/overage checks |
 
 **The allowlist is desugared, not separately filtered.** `excludedModelsForRequest`
 adds every routable model absent from a non-empty allowlist to the exclusion

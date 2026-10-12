@@ -381,7 +381,7 @@ func TestSubscriptionRefreshLeaseSurvivesKeyRotation(t *testing.T) {
 	assert.Empty(t, persisted.TokenRefreshLeaseID, "persisting releases the lease")
 }
 
-func TestSubscriptionCandidatesAdmitOnlyOptedInSharedKeys(t *testing.T) {
+func TestSubscriptionCandidatesAdmitLiveSharedKeys(t *testing.T) {
 	fixture := newSubscriptionFixture(t)
 	repo := postgres.NewSubscriptionAccountRepo(fixture.pool)
 	admission := repo.(interface {
@@ -399,31 +399,16 @@ func TestSubscriptionCandidatesAdmitOnlyOptedInSharedKeys(t *testing.T) {
 	sharedKeyOwner := auth.SubscriptionOwner{InstallationID: fixture.installationID.String(), APIKeyID: fixture.legacyKey.String()}
 	candidates, err := admission.ListSubscriptionCandidates(ctx, sharedKeyOwner)
 	require.NoError(t, err)
-	assert.Empty(t, candidates, "a subject-less key fails closed by default")
-
-	_, err = fixture.pool.Exec(ctx, "UPDATE router.model_router_api_keys SET shared_subscription_access = TRUE WHERE id = $1", fixture.legacyKey)
-	require.NoError(t, err)
-	candidates, err = admission.ListSubscriptionCandidates(ctx, sharedKeyOwner)
-	require.NoError(t, err)
-	require.Len(t, candidates, 1)
+	require.Len(t, candidates, 1, "a shared key borrows whenever the installation shares capacity")
 	assert.Equal(t, account.ID, candidates[0].ID)
 	assert.Equal(t, auth.SubscriptionTierShared, candidates[0].Tier)
-
-	_, err = fixture.pool.Exec(ctx, "UPDATE router.model_router_api_keys SET shared_subscription_access = FALSE WHERE id = $1", fixture.legacyKey)
-	require.NoError(t, err)
-	candidates, err = admission.ListSubscriptionCandidates(ctx, sharedKeyOwner)
-	require.NoError(t, err)
-	assert.Empty(t, candidates, "opting the key back out revokes borrowing")
-
-	_, err = fixture.pool.Exec(ctx, "UPDATE router.model_router_api_keys SET shared_subscription_access = TRUE WHERE id = $1", fixture.legacyKey)
-	require.NoError(t, err)
 
 	_, err = fixture.pool.Exec(ctx,
 		"UPDATE router.model_router_installations SET subscription_sharing_enabled = FALSE WHERE id = $1", fixture.installationID)
 	require.NoError(t, err)
 	candidates, err = admission.ListSubscriptionCandidates(ctx, sharedKeyOwner)
 	require.NoError(t, err)
-	assert.Empty(t, candidates, "the opt-in borrows only while the installation shares capacity")
+	assert.Empty(t, candidates, "a shared key borrows only while the installation shares capacity")
 
 	_, err = fixture.pool.Exec(ctx,
 		"UPDATE router.model_router_installations SET subscription_sharing_enabled = TRUE WHERE id = $1", fixture.installationID)
@@ -432,10 +417,8 @@ func TestSubscriptionCandidatesAdmitOnlyOptedInSharedKeys(t *testing.T) {
 	require.NoError(t, err)
 	candidates, err = admission.ListSubscriptionCandidates(ctx, sharedKeyOwner)
 	require.NoError(t, err)
-	assert.Empty(t, candidates, "a deleted key loses its opt-in")
+	assert.Empty(t, candidates, "a deleted key cannot borrow")
 
-	_, err = fixture.pool.Exec(ctx, "UPDATE router.model_router_api_keys SET shared_subscription_access = TRUE WHERE id = $1", fixture.keyB1)
-	require.NoError(t, err)
 	_, err = fixture.pool.Exec(ctx,
 		"UPDATE router.credential_subject_installations SET access_enabled = FALSE WHERE subject_id = $1 AND installation_id = $2",
 		fixture.subscriberB, fixture.installationID)
@@ -444,5 +427,5 @@ func TestSubscriptionCandidatesAdmitOnlyOptedInSharedKeys(t *testing.T) {
 		InstallationID: fixture.installationID.String(), SubscriberID: fixture.subscriberB.String(), APIKeyID: fixture.keyB1.String(),
 	})
 	require.NoError(t, err)
-	assert.Empty(t, candidates, "the opt-in never bypasses a personal key's revoked membership")
+	assert.Empty(t, candidates, "a personal key never bypasses its revoked membership")
 }

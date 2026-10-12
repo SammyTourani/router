@@ -387,16 +387,15 @@ JOIN installation ON TRUE
 WHERE (account.provider <> 'codex' OR account.provider_user_id IS NOT NULL)
  AND (account.subscriber_id = $1::uuid
    OR (installation.subscription_sharing_enabled
-       -- Only a verified requester that remains an active member borrows shared
-       -- capacity. A subject-less key fails closed unless an admin opted it in.
+       -- A personal key borrows only while its owner remains an active member;
+       -- a live installation-shared (subject-less) key always may.
        AND (EXISTS (SELECT 1 FROM members AS requester WHERE requester.subject_id = $1::uuid)
          OR ($1::uuid IS NULL AND EXISTS (
            SELECT 1 FROM router.model_router_api_keys AS requester_key
            WHERE requester_key.id = $2::uuid
              AND requester_key.installation_id = installation.id
              AND requester_key.deleted_at IS NULL
-             AND requester_key.credential_subject_id IS NULL
-             AND requester_key.shared_subscription_access)))
+             AND requester_key.credential_subject_id IS NULL)))
        AND EXISTS (
         SELECT 1 FROM router.model_router_subscription_account_installations AS registration
         WHERE registration.installation_id = installation.id AND registration.subscription_account_id = account.id)))
@@ -426,7 +425,7 @@ type ListModelRouterSubscriptionCandidatesRow struct {
 	Tier                   string
 }
 
-// Read from the primary so admission observes current membership, key opt-in and sharing settings.
+// Read from the primary so admission observes current membership, key lifecycle and sharing settings.
 // Locks are held only for this statement and serialize with settings/access writes.
 //
 //	WITH installation AS MATERIALIZED (
@@ -452,16 +451,15 @@ type ListModelRouterSubscriptionCandidatesRow struct {
 //	WHERE (account.provider <> 'codex' OR account.provider_user_id IS NOT NULL)
 //	 AND (account.subscriber_id = $1::uuid
 //	   OR (installation.subscription_sharing_enabled
-//	       -- Only a verified requester that remains an active member borrows shared
-//	       -- capacity. A subject-less key fails closed unless an admin opted it in.
+//	       -- A personal key borrows only while its owner remains an active member;
+//	       -- a live installation-shared (subject-less) key always may.
 //	       AND (EXISTS (SELECT 1 FROM members AS requester WHERE requester.subject_id = $1::uuid)
 //	         OR ($1::uuid IS NULL AND EXISTS (
 //	           SELECT 1 FROM router.model_router_api_keys AS requester_key
 //	           WHERE requester_key.id = $2::uuid
 //	             AND requester_key.installation_id = installation.id
 //	             AND requester_key.deleted_at IS NULL
-//	             AND requester_key.credential_subject_id IS NULL
-//	             AND requester_key.shared_subscription_access)))
+//	             AND requester_key.credential_subject_id IS NULL)))
 //	       AND EXISTS (
 //	        SELECT 1 FROM router.model_router_subscription_account_installations AS registration
 //	        WHERE registration.installation_id = installation.id AND registration.subscription_account_id = account.id)))
