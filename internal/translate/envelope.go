@@ -756,6 +756,7 @@ func rewriteMessageBlocks(
 	}
 
 	anyChanged := false
+	droppedMessage := false
 	var msgRaws []string
 	var walkErr error
 
@@ -804,6 +805,7 @@ func rewriteMessageBlocks(
 		if len(kept) == 0 {
 			// Every block in this message was dropped; drop the message itself
 			// rather than emit an empty content array.
+			droppedMessage = true
 			return true
 		}
 
@@ -822,8 +824,32 @@ func rewriteMessageBlocks(
 	if !anyChanged {
 		return body, nil
 	}
+	if droppedMessage {
+		msgRaws = keepSystemMessagesBeforeAssistant(msgRaws)
+	}
 
 	return sjson.SetRawBytes(body, "messages", []byte("["+strings.Join(msgRaws, ",")+"]"))
+}
+
+// keepSystemMessagesBeforeAssistant moves each run of role:"system" messages
+// that no longer directly precedes an assistant turn to just before the next
+// one, or to the end. Anthropic 400s on a system message followed by a user
+// message, which a dropped assistant turn can leave behind.
+func keepSystemMessagesBeforeAssistant(msgRaws []string) []string {
+	out := make([]string, 0, len(msgRaws))
+	var pending []string
+	for _, raw := range msgRaws {
+		switch gjson.Get(raw, "role").String() {
+		case "system":
+			pending = append(pending, raw)
+			continue
+		case "assistant":
+			out = append(out, pending...)
+			pending = pending[:0]
+		}
+		out = append(out, raw)
+	}
+	return append(out, pending...)
 }
 
 // stripThinkingBlocksBytes removes thinking/redacted_thinking blocks from
