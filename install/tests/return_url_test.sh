@@ -25,14 +25,10 @@ chmod +x "$fake_bin/curl"
 
 case "$(uname -s)" in
   Darwin*) opener="open" ;;
-  MINGW*|MSYS*|CYGWIN*) opener="explorer.exe" ;;
+  MINGW*|MSYS*|CYGWIN*) opener="rundll32.exe" ;;
   *) opener="xdg-open" ;;
 esac
-if [ "$opener" = "explorer.exe" ]; then
-  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" "$@" >"$OPEN_LOG"' 'exit 1' >"$fake_bin/$opener"
-else
-  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" "$@" >"$OPEN_LOG"' >"$fake_bin/$opener"
-fi
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" "${@: -1}" >"$OPEN_LOG"' >"$fake_bin/$opener"
 chmod +x "$fake_bin/$opener"
 
 pass=0
@@ -99,22 +95,21 @@ HOME="$env_home" OPEN_LOG="$env_log" PATH="$fake_bin:$PATH" NO_COLOR=1 \
 check "opens WEAVE_ROUTER_RETURN_URL after verification" \
   "https://app.example.test/continue?source=router&ok=1" "$(cat "$env_log")"
 
-# explorer.exe commonly exits 1 after handing the URL to an already-running
-# shell. Treat launch as success so the installer does not warn falsely.
 win_home="$work/windows-opener"
 mkdir -p "$win_home/bin"
 printf '%s\n' '#!/usr/bin/env bash' 'printf "MSYS_NT-10.0\n"' >"$win_home/bin/uname"
-printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$@" >"$OPEN_LOG"' 'exit 1' >"$win_home/bin/explorer.exe"
-chmod +x "$win_home/bin/uname" "$win_home/bin/explorer.exe"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$@" >"$OPEN_LOG"' >"$win_home/bin/rundll32.exe"
+chmod +x "$win_home/bin/uname" "$win_home/bin/rundll32.exe"
 : >"$work/windows-opener.log"
 # Extract just open_url_in_browser from the installer so PATH/uname can be stubbed.
 eval "$(awk '/^open_url_in_browser\(\)/,/^open_return_url_if_verified\(\)/' "$installer" | sed '$d')"
 win_rc=0
 OPEN_LOG="$work/windows-opener.log" PATH="$win_home/bin:$PATH" \
   open_url_in_browser 'https://app.example.test/continue?source=router&ok=1' || win_rc=$?
-check "Windows opener succeeds when explorer.exe exits 1" "0" "$win_rc"
-check "Windows opener still launches the URL" \
-  "https://app.example.test/continue?source=router&ok=1" "$(cat "$work/windows-opener.log")"
+check "Windows opener succeeds via rundll32" "0" "$win_rc"
+check "Windows opener hands the full URL to the URL protocol handler" \
+  "url.dll,FileProtocolHandler
+https://app.example.test/continue?source=router&ok=1" "$(cat "$work/windows-opener.log")"
 
 if [ "$fail" -gt 0 ]; then
   printf '\n%d passed, %d failed\n' "$pass" "$fail" >&2
