@@ -238,6 +238,7 @@ func resolveForceModelWithEffort(model string) (canonicalID, provider string, kn
 		}
 	} else if effort == "" {
 		if head, level, ok := cutSpelledEffort(model); ok {
+			head, _ = translate.CanonicalModel(head)
 			if id, ok := lookupForceModelName(head); ok {
 				if m, ok := servableForceModel(id, requiredProvider); ok {
 					return m.ID, m.Providers[0].Provider, true, router.CanonicalizeEffort(level)
