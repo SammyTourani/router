@@ -32,6 +32,10 @@ async function main() {
     throw new Error("This Windows release supports install and --uninstall. Other router commands are not yet available natively.");
   }
   if (options.returnUrl && options.mode !== "install") throw new Error("--return-url is supported only for install.");
+  // npx.cmd re-parses arguments through cmd.exe, which splits a URL at '&'; the PowerShell command passes it by env instead.
+  if (!options.returnUrl && options.mode === "install" && process.env.WEAVE_ROUTER_RETURN_URL) {
+    options.returnUrl = validReturnUrl(process.env.WEAVE_ROUTER_RETURN_URL, "WEAVE_ROUTER_RETURN_URL");
+  }
   if (options.scope === "project" && !options.directory) {
     options.directory = findGitRoot(process.cwd());
     if (!options.directory) throw new Error("--scope project must run inside a git repo, or pass --dir <path>.");
@@ -82,6 +86,11 @@ async function main() {
   }
 }
 
+function validReturnUrl(value, source) {
+  if (!/^https?:$/.test(safeUrlProtocol(value))) throw new Error(`${source} must be an http:// or https:// URL.`);
+  return value;
+}
+
 // URL.parse needs Node 22; the package supports Node 18.
 function safeUrlProtocol(value) {
   try {
@@ -95,14 +104,13 @@ function probe(url, headers) {
   return fetch(url, { headers, signal: AbortSignal.timeout(5000) }).then((response) => response.ok).catch(() => false);
 }
 
-// explorer.exe is a direct process launch; `cmd /c start` would parse the
-// URL's '&' query separators as shell syntax. Its exit status is meaningless.
+// explorer.exe can exit without opening anything, and `cmd /c start` would parse the URL's '&' query separators as shell syntax.
 function openInBrowser(url) {
-  const [opener, ignoreExitStatus] = process.platform === "win32" ? ["explorer.exe", true] : process.platform === "darwin" ? ["open", false] : ["xdg-open", false];
+  const [opener, ...openerArgs] = process.platform === "win32" ? ["rundll32.exe", "url.dll,FileProtocolHandler"] : [process.platform === "darwin" ? "open" : "xdg-open"];
   return new Promise((resolve) => {
-    const child = spawn(opener, [url], { stdio: "ignore", windowsHide: true });
+    const child = spawn(opener, [...openerArgs, url], { stdio: "ignore", windowsHide: true });
     child.once("error", () => resolve(false));
-    child.once("exit", (code) => resolve(ignoreExitStatus || code === 0));
+    child.once("exit", (code) => resolve(code === 0));
   });
 }
 
@@ -123,10 +131,8 @@ function parseArgs(args) {
         options.scope = value;
       } else if (arg === "--dir") { options.directory = value; options.explicitDirectory = true; }
       else if (arg === "--base-url") options.baseUrl = value;
-      else if (arg === "--return-url") {
-        if (!/^https?:$/.test(safeUrlProtocol(value))) throw new Error("--return-url must be an http:// or https:// URL.");
-        options.returnUrl = value;
-      } else options.email = value;
+      else if (arg === "--return-url") options.returnUrl = validReturnUrl(value, arg);
+      else options.email = value;
     } else if (arg === "install" || arg === "setup") {
       if (arg === "setup") throw new Error("'setup' is not yet available in the native Windows installer; choose one client with --claude or --codex.");
     } else if (["off", "--off", "on", "--on", "status", "--status", "update", "--update", "models", "accounts", "login", "disable-routing"].includes(arg)) {

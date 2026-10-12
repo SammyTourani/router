@@ -76,7 +76,9 @@ export function routerOrigin(): string {
  * The npx one-liner that configures `harnessID` against this router. The token
  * rides in as WEAVE_ROUTER_KEY, which the installer reads to skip its
  * interactive prompt: a per-command env prefix in POSIX shells, a session
- * variable in PowerShell, which has no prefix form.
+ * variable in PowerShell (which has no prefix form), removed after the run.
+ * PowerShell calls npx.cmd because npx.ps1 is blocked by the Restricted
+ * execution policy.
  *
  * `--package … -- <bin>` rather than `npx -y @weave-os/router`: npm <= 6's
  * bundled npx treats an undeclared flag as consuming the next token, so the
@@ -92,10 +94,10 @@ export function installCommand(
 ): string {
   const quote = shell === "powershell" ? powerShellSingleQuote : shellSingleQuote;
   const flags = [`--${harnessID}`, `--scope ${scope}`, `--base-url ${quote(origin)}`];
-  const npx = `npx --package @weave-os/router -y -- weave-router ${flags.join(" ")}`;
+  const npxArgs = `--package @weave-os/router -y -- weave-router ${flags.join(" ")}`;
   return shell === "powershell"
-    ? `$env:WEAVE_ROUTER_KEY=${quote(token)}; ${npx}`
-    : `WEAVE_ROUTER_KEY=${quote(token)} ${npx}`;
+    ? `$env:WEAVE_ROUTER_KEY=${quote(token)}; npx.cmd ${npxArgs}; Remove-Item Env:WEAVE_ROUTER_KEY`
+    : `WEAVE_ROUTER_KEY=${quote(token)} npx ${npxArgs}`;
 }
 
 /**

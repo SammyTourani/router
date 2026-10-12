@@ -88,6 +88,17 @@ HOME="$invalid_home" OPEN_LOG="$invalid_log" PATH="$fake_bin:$PATH" NO_COLOR=1 \
 check "rejects non-http return URLs" "2" "$invalid_rc"
 check "does not open a rejected return URL" "" "$(cat "$invalid_log")"
 
+env_home="$work/env-return-url"
+env_log="$work/env-browser.log"
+mkdir -p "$env_home"
+: >"$env_log"
+HOME="$env_home" OPEN_LOG="$env_log" PATH="$fake_bin:$PATH" NO_COLOR=1 \
+  WEAVE_ROUTER_KEY="rk_return_url_test" WEAVE_ROUTER_RETURN_URL='https://app.example.test/continue?source=router&ok=1' \
+  bash "$installer" --claude --scope user --quiet --non-interactive --base-url http://127.0.0.1:9 \
+    </dev/null >"$env_home/install.log" 2>&1 || true
+check "opens WEAVE_ROUTER_RETURN_URL after verification" \
+  "https://app.example.test/continue?source=router&ok=1" "$(cat "$env_log")"
+
 # explorer.exe commonly exits 1 after handing the URL to an already-running
 # shell. Treat launch as success so the installer does not warn falsely.
 win_home="$work/windows-opener"

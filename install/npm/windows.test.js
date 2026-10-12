@@ -240,7 +240,7 @@ test("Codex uninstall after upgrading a stateless install removes the managed pr
   assert.equal(settings.model_providers?.weave, undefined);
 });
 
-test("the return URL opens only after the router and key both verify", { skip: process.platform === "win32" && "explorer.exe cannot be stubbed on Windows" }, async () => {
+test("the return URL opens only after the router and key both verify", { skip: process.platform === "win32" && "rundll32.exe cannot be stubbed on Windows" }, async () => {
   const home = path.join(temporaryHome, "return-url");
   const fakeBin = path.join(home, "bin");
   const openLog = path.join(home, "opened.log");
@@ -255,9 +255,13 @@ test("the return URL opens only after the router and key both verify", { skip: p
   assert.equal(fs.existsSync(openLog), false);
   await runInstallerAt(home, ["--claude", "--non-interactive", "--base-url", baseUrl, "--return-url", returnUrl], { envOverrides: env });
   assert.equal(fs.readFileSync(openLog, "utf8"), `${returnUrl}\n`);
+  fs.rmSync(openLog);
+  await runInstallerAt(home, ["--claude", "--non-interactive", "--base-url", baseUrl], { envOverrides: { ...env, WEAVE_ROUTER_RETURN_URL: returnUrl } });
+  assert.equal(fs.readFileSync(openLog, "utf8"), `${returnUrl}\n`);
 });
 
 test("native installer rejects a non-http return URL and a return URL on uninstall", async () => {
   await assert.rejects(runInstaller("--claude", "--non-interactive", "--base-url", baseUrl, "--return-url", "javascript:alert(1)"), (error) => error.stderr.includes("http:// or https://"));
   await assert.rejects(runInstaller("--claude", "--uninstall", "--return-url", "https://app.example.test"), (error) => error.stderr.includes("only for install"));
+  await assert.rejects(runInstallerAt(path.join(temporaryHome, "env-return-url"), ["--claude", "--non-interactive", "--base-url", baseUrl], { envOverrides: { WEAVE_ROUTER_RETURN_URL: "file:///C:/Windows" } }), (error) => error.stderr.includes("WEAVE_ROUTER_RETURN_URL must be an http:// or https://"));
 });

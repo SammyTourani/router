@@ -53,7 +53,7 @@
 #   npx @weave-os/router --local                          # local router on localhost:8080
 #   npx @weave-os/router --base-url http://localhost:8080 # self-hosted, custom port
 #   npx @weave-os/router --email you@example.com          # set the router identity email without prompting
-#   npx @weave-os/router --return-url https://example.com # open a URL after a verified install
+#   npx @weave-os/router --return-url https://example.com # open a URL after a verified install (or WEAVE_ROUTER_RETURN_URL)
 #   npx @weave-os/router --non-interactive                # require WEAVE_ROUTER_KEY env var (defaults target to claude)
 #   npx @weave-os/router --quiet                          # suppress banner, ping check, and trailing tips (return-url still verifies)
 #   npx @weave-os/router --rotate-key                     # ignore the installed key and prompt for a new one
@@ -1638,6 +1638,15 @@ fi
 if [ -n "$return_url" ] && [ "$mode" != "install" ]; then
   err "--return-url is supported only for install (or setup with one explicit target)."
   exit 2
+fi
+# The Windows PowerShell command passes the URL by env: npx.cmd re-parses
+# arguments through cmd.exe, which splits a URL at '&'.
+if [ -z "$return_url" ] && [ "$mode" = "install" ] && [ -n "${WEAVE_ROUTER_RETURN_URL:-}" ]; then
+  return_url="$WEAVE_ROUTER_RETURN_URL"
+  case "$return_url" in
+    http://*|https://*) ;;
+    *) err "WEAVE_ROUTER_RETURN_URL must be an http:// or https:// URL."; exit 2 ;;
+  esac
 fi
 
 # --lsp is a pi-extension feature, so it implies the pi target; combining it
