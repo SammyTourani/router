@@ -3436,13 +3436,10 @@ open_url_in_browser() {
       open "$url" >/dev/null 2>&1
       ;;
     MINGW*|MSYS*|CYGWIN*)
-      # explorer.exe is a direct process launch; cmd.exe /c start would parse
-      # URL query separators such as '&' as shell syntax. Its exit status is
-      # not meaningful: an already-running shell commonly returns 1 after
-      # handing the URL off.
-      command -v explorer.exe >/dev/null 2>&1 || return 1
-      explorer.exe "$url" >/dev/null 2>&1 || true
-      return 0
+      # explorer.exe can open a File Explorer window instead of the browser,
+      # and cmd.exe /c start would parse URL query separators such as '&'.
+      command -v rundll32.exe >/dev/null 2>&1 || return 1
+      rundll32.exe url.dll,FileProtocolHandler "$url" >/dev/null 2>&1
       ;;
     *)
       command -v xdg-open >/dev/null 2>&1 || return 1
