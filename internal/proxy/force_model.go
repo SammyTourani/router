@@ -405,7 +405,7 @@ func suggestForceModel(input string) string {
 	var best forceModelSuggestion
 	bestDist, ambiguous := maxDist+1, false
 	for k, cand := range forceModelSuggestions {
-		if digitsOf(k) != digits {
+		if lenGap := len(k) - len(key); lenGap > maxDist || -lenGap > maxDist || digitsOf(k) != digits {
 			continue
 		}
 		d := editDistance(key, k)
