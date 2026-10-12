@@ -112,3 +112,16 @@ func prepareFinalAssistantAnthropic(t *testing.T, body []byte) []byte {
 	require.NoError(t, err)
 	return prepared.Body
 }
+
+func TestAnthropicFinalAssistantDroppedForPrefillUnsupportedModel(t *testing.T) {
+	body := []byte(`{"model":"gpt-6-astra","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Add the schema"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I'm now adding the schema."}]}],"stream":true}`)
+	conversion, err := translate.ConvertResponsesToChatCompletionsWithOptions(body, translate.ResponsesConversionOptions{PortableCodex: true})
+	require.NoError(t, err)
+	envelope, err := translate.ParseOpenAI(conversion.Body)
+	require.NoError(t, err)
+	prepared, err := envelope.PrepareAnthropic(http.Header{}, translate.EmitOptions{TargetModel: "claude-opus-5-5", Capabilities: router.Lookup("claude-opus-5-5"), TargetProvider: providers.ProviderAnthropic})
+	require.NoError(t, err)
+	messages := gjson.GetBytes(prepared.Body, "messages").Array()
+	require.Len(t, messages, 1)
+	assert.Equal(t, "user", messages[0].Get("role").String())
+}

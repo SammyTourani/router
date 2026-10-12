@@ -66,3 +66,27 @@ func normalizeAnthropicFinalAssistant(body []byte) ([]byte, error) {
 	}
 	return body, nil
 }
+
+// dropAnthropicFinalAssistant removes a trailing assistant turn for models that
+// reject prefill. Clients resend a stream-cut turn's partial commentary as the
+// last message (Codex retries); the model regenerates it instead of the turn
+// failing. A trailing tool_use is left for the orphan sanitizer.
+func dropAnthropicFinalAssistant(body []byte) ([]byte, error) {
+	for {
+		messages := gjson.GetBytes(body, "messages").Array()
+		last := len(messages) - 1
+		if last < 1 || EscalationRole(messages[last].Get("role").String()) != EscalationRoleAssistant {
+			return body, nil
+		}
+		for _, block := range messages[last].Get("content").Array() {
+			if block.Get("type").String() == "tool_use" {
+				return body, nil
+			}
+		}
+		var err error
+		body, err = sjson.DeleteBytes(body, fmt.Sprintf("messages.%d", last))
+		if err != nil {
+			return nil, err
+		}
+	}
+}

@@ -26,6 +26,9 @@ const (
 	// CapTemperatureUnsupported marks Anthropic models that reject the
 	// temperature parameter even though they accept other sampling controls.
 	CapTemperatureUnsupported ModelCapability = "temperature_unsupported"
+	// CapAssistantPrefillUnsupported marks models that 400 when the
+	// conversation ends on an assistant message.
+	CapAssistantPrefillUnsupported ModelCapability = "assistant_prefill_unsupported"
 )
 
 // ModelSpec describes what a model supports. Zero value is safe: provider
@@ -173,7 +176,11 @@ var registry = map[string]ModelSpec{
 		CapAdaptiveThinking, CapExtendedContext, CapXhighEffort, CapServerSideFallback,
 		CapAutoToolChoiceOnly, CapTemperatureUnsupported,
 	),
-	"claude-opus-5-5": anthropicAdaptiveFallbackAutoTools,
+	"claude-opus-5-5": NewSpecWithReasoning(
+		ReasoningCapabilities{Levels: []string{"low", "medium", "high", "max", "xhigh"}, AlwaysOn: true},
+		CapAdaptiveThinking, CapExtendedContext, CapXhighEffort, CapServerSideFallback,
+		CapAutoToolChoiceOnly, CapAssistantPrefillUnsupported,
+	),
 	// Sonnet 5.5 accepts xhigh, unlike Sonnet 5.
 	"claude-sonnet-5-5": anthropicAdaptiveFallbackAutoTools,
 	"claude-opus-5":     anthropicAdaptiveFallback,
