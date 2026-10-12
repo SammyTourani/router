@@ -38,10 +38,13 @@ check() {
 }
 
 for script in install.sh uninstall.sh; do
+  unset -f statusline_commands_match claude_statusline_router_owned 2>/dev/null || true
   # Load just the ownership helpers so cygpath and the paths can be stubbed.
   eval "$(sed -n '/^CLAUDE_STATUSLINE_MARKER=/p' "$script_dir/../$script")"
   eval "$(awk '/^statusline_commands_match\(\)/,/^}/' "$script_dir/../$script")"
   eval "$(awk '/^claude_statusline_router_owned\(\)/,/^}/' "$script_dir/../$script")"
+  declare -F statusline_commands_match claude_statusline_router_owned >/dev/null ||
+    { echo "statusline_windows_path_test: could not load helpers from $script" >&2; exit 1; }
 
   rc=0
   PATH="$fixture_dir/bin:$PATH" claude_statusline_router_owned \

@@ -207,12 +207,12 @@ weave_command_router_owned() {
 # Git Bash rewrites $HOME's /c/... form to C:/... in arguments to native
 # executables such as jq.exe, so the stored command can use either form.
 statusline_commands_match() {
-  local first second
+  local first_mixed second_mixed
   [ "$1" = "$2" ] && return 0
   command -v cygpath >/dev/null 2>&1 || return 1
-  first="$(cygpath -m -- "$1" 2>/dev/null)" && [ -n "$first" ] || return 1
-  second="$(cygpath -m -- "$2" 2>/dev/null)" && [ -n "$second" ] || return 1
-  [ "$first" = "$second" ]
+  first_mixed="$(cygpath -m -- "$1" 2>/dev/null)" && [ -n "$first_mixed" ] || return 1
+  second_mixed="$(cygpath -m -- "$2" 2>/dev/null)" && [ -n "$second_mixed" ] || return 1
+  [ "$first_mixed" = "$second_mixed" ]
 }
 
 # claude_statusline_router_owned reports whether a settings entry points at the
