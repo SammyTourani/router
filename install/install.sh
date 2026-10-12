@@ -457,9 +457,12 @@ claude_statusline_configured() {
 # Git Bash rewrites $HOME's /c/... form to C:/... in arguments to native
 # executables such as jq.exe, so the stored command can use either form.
 statusline_commands_match() {
+  local first second
   [ "$1" = "$2" ] && return 0
   command -v cygpath >/dev/null 2>&1 || return 1
-  [ "$(cygpath -m -- "$1" 2>/dev/null)" = "$(cygpath -m -- "$2" 2>/dev/null)" ]
+  first="$(cygpath -m -- "$1" 2>/dev/null)" && [ -n "$first" ] || return 1
+  second="$(cygpath -m -- "$2" 2>/dev/null)" && [ -n "$second" ] || return 1
+  [ "$first" = "$second" ]
 }
 
 # claude_statusline_router_owned reports whether a settings entry points at the

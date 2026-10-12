@@ -12,10 +12,13 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 mkdir -p "$work/bin" "$work/weave"
-printf '%s\n' '#!/usr/bin/env bash' \
+printf '%s\n' '#!/bin/sh' \
   '[ "$1" = "-m" ] && [ "$2" = "--" ] || exit 2' \
   'case "$3" in /c/*) printf "C:%s\n" "${3#/c}" ;; *) printf "%s\n" "$3" ;; esac' >"$work/bin/cygpath"
 chmod +x "$work/bin/cygpath"
+mkdir -p "$work/broken-bin"
+printf '%s\n' '#!/bin/sh' 'exit 127' >"$work/broken-bin/cygpath"
+chmod +x "$work/broken-bin/cygpath"
 
 posix_command="/c/Users/dev/.weave/cc-statusline.sh"
 script_path="$work/weave/cc-statusline.sh"
@@ -48,6 +51,11 @@ for script in install.sh uninstall.sh; do
   PATH="$work/bin:$PATH" claude_statusline_router_owned \
     "$settings" "/c/Users/other/.weave/cc-statusline.sh" "$script_path" "$script_path.weave-router" || rc=$?
   check "$script still rejects a different statusline path" "1" "$rc"
+
+  rc=0
+  PATH="$work/broken-bin:$PATH" claude_statusline_router_owned \
+    "$settings" "$posix_command" "$script_path" "$script_path.weave-router" || rc=$?
+  check "$script does not claim ownership when cygpath fails" "1" "$rc"
 done
 
 echo
