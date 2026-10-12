@@ -678,6 +678,7 @@ func (s *Service) bypassToAnthropic(
 		s.fireTelemetry(telemetryParams)
 	}
 
+	servedCredentialSource, servedSubscriptionTier := s.servedCredentialLogValues(ctx)
 	log.Info("ProxyMessages usage-bypass complete",
 		"request_id", requestID,
 		"external_id", externalID,
@@ -686,6 +687,8 @@ func (s *Service) bypassToAnthropic(
 		"proxy_ms", time.Since(proxyStart).Milliseconds(),
 		"total_ms", time.Since(requestStart).Milliseconds(),
 		"proxy_err", proxyErr,
+		"credential_source", servedCredentialSource,
+		"subscription_tier", servedSubscriptionTier,
 	)
 	return proxyErr
 }
