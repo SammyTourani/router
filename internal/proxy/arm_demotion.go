@@ -369,7 +369,7 @@ func isRescuedPrimaryFailure(err error) bool {
 	if providers.IsUpstreamModelNotFound(err) || isSubscriptionPoolError(err) {
 		return false
 	}
-	return upstreamStatus(err) != providerOverloadedStatus
+	return true
 }
 
 // isCommittedStreamFailure reports whether err is an upstream-owned end of a

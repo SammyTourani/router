@@ -329,6 +329,40 @@ func TestSubscriptionStateModelsPaidFallbackSkipsUnavailableProvider(t *testing.
 	require.Equal(t, []string{statePaidModel}, servedModels)
 }
 
+func TestSubscriptionStateModelsPaidRetryPreservesPreferences(t *testing.T) {
+	claude := &fakeClient{name: providers.ProviderAnthropic, outcomes: []fakeOutcome{{writeBytes: []byte("lower ranked paid answer")}}}
+	codex := &fakeClient{name: providers.ProviderOpenAI, outcomes: []fakeOutcome{{writeBytes: []byte("lower ranked Codex answer")}}}
+	paid := &fakeClient{name: providers.ProviderOpenRouter, outcomes: []fakeOutcome{{writeBytes: []byte("preferred paid answer")}}}
+	svc := NewService(stateModelRouter{}, map[string]providers.Client{
+		providers.ProviderAnthropic:  claude,
+		providers.ProviderOpenAI:     codex,
+		providers.ProviderOpenRouter: paid,
+	}, nil, false, nil, nil, false, "", "", nil).
+		WithAvailableModels(modelSet([]string{stateClaudeModel, stateCodexModel, statePaidModel})).
+		WithDeploymentKeyedProviders(modelSet([]string{providers.ProviderOpenAI, providers.ProviderOpenRouter}))
+	ctx := context.WithValue(context.Background(), InstallationExcludedProvidersContextKey{}, []string{providers.ProviderAnthropic})
+	ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenActiveContextKey{}, []string{stateClaudeModel, stateCodexModel})
+	ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenInactiveContextKey{}, []string{stateClaudeModel, statePaidModel})
+	req := router.Request{EnabledProviders: modelSet([]string{providers.ProviderAnthropic, providers.ProviderOpenAI, providers.ProviderOpenRouter})}
+	recorder := httptest.NewRecorder()
+	buffer := newPreludeBuffer(recorder)
+	_, err := svc.dispatchWithFallback(ctx, failoverInputs{
+		w: recorder, buf: buffer, subscriptionStateRequest: &req,
+		initialDecision: router.Decision{Model: stateClaudeModel, Provider: providers.ProviderAnthropic},
+		purpose:         inference.PurposeAnthropicMessages,
+		buildAlternative: func(router.Decision) (dispatchAttempt, error) {
+			return func(attemptCtx context.Context, decision router.Decision, client providers.Client) error {
+				buffer.Seal()
+				return client.Proxy(attemptCtx, decision, providers.PreparedRequest{}, buffer, nil)
+			}, nil
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "preferred paid answer", recorder.Body.String(), "unavailable Claude capacity must retain the next preferred paid model")
+	require.Zero(t, claude.calls)
+	require.Zero(t, codex.calls)
+}
+
 func TestSubscriptionStateFailedTargetReachesRecoveryCallback(t *testing.T) {
 	paidClient := &fakeClient{name: providers.ProviderOpenRouter}
 	svc := NewService(stateModelRouter{}, map[string]providers.Client{providers.ProviderOpenRouter: paidClient}, nil, false, nil, nil, false, "", "", nil)

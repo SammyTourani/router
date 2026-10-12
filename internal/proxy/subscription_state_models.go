@@ -224,8 +224,8 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 		return -1, ctx.Err()
 	}
 	paidModels := s.subscriptionStateCandidates(ctx, request, in.initialDecision.Model)
+	request.PreferredModels = append(append([]string{}, installationSubscriptionModelsWhenInactiveFromContext(ctx)...), request.PreferredModels...)
 	paidCtx, paidReq := s.subscriptionStateRequest(ctx, request, paidModels)
-	paidReq.PreferredModels = append(append([]string{}, installationSubscriptionModelsWhenInactiveFromContext(ctx)...), request.PreferredModels...)
 	paidCtx = billing.ReleaseLinkedFirst(paidCtx)
 	paidCtx = context.WithValue(paidCtx, subscriptionAPIOnlyKey{}, true)
 	if subscriptionRotationExpired(ctx, rotationBudget) {

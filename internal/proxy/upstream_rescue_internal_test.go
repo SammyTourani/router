@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -70,11 +72,22 @@ type subscriptionFailingClient struct{ failingClient }
 func (*subscriptionFailingClient) SupportsSubscriptions() bool { return true }
 
 func TestUpstreamRescueDoesNotReturnToFailedModel(t *testing.T) {
-	for _, subscriptionWalk := range []bool{false, true} {
+	for _, failure := range []struct {
+		name             string
+		subscriptionWalk bool
+		err              error
+	}{
+		{"http", false, &providers.UpstreamErrorResponse{Status: http.StatusBadGateway}},
+		{"subscription-http", true, &providers.UpstreamErrorResponse{Status: http.StatusBadGateway}},
+		{"overloaded", false, &providers.UpstreamErrorResponse{Status: providerOverloadedStatus}},
+		{"subscription-overloaded", true, &providers.UpstreamErrorResponse{Status: providerOverloadedStatus}},
+		{"transport", false, &url.Error{Op: http.MethodPost, URL: "https://synthetic.invalid/v1/messages", Err: syscall.ECONNRESET}},
+		{"subscription-transport", true, &url.Error{Op: http.MethodPost, URL: "https://synthetic.invalid/v1/messages", Err: syscall.ECONNRESET}},
+	} {
 		for _, openAI := range []bool{false, true} {
-			t.Run(fmt.Sprintf("subscription=%t/chat=%t", subscriptionWalk, openAI), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/chat=%t", failure.name, openAI), func(t *testing.T) {
 				store := rescueSessionStore{newRowBackedPinStore()}
-				primary := &subscriptionFailingClient{failingClient{err: &providers.UpstreamErrorResponse{Status: http.StatusBadGateway}}}
+				primary := &subscriptionFailingClient{failingClient{err: failure.err}}
 				sibling := &servingClient{}
 				priority := rescuePriorityRouter{decisions: []router.Decision{rescuableDecision("cluster:test", true), {Model: rescuerModel, Provider: providers.ProviderOpenAI}}}
 				svc := NewService(priority, map[string]providers.Client{providers.ProviderAnthropic: primary, providers.ProviderOpenAI: sibling}, nil, false, nil, store, false, "", "", nil).
@@ -82,7 +95,7 @@ func TestUpstreamRescueDoesNotReturnToFailedModel(t *testing.T) {
 					WithDeploymentKeyedProviders(modelSet([]string{providers.ProviderAnthropic, providers.ProviderOpenAI})).
 					WithRetrySleep(func(context.Context, time.Duration) error { return nil })
 				ctx := rescuedFailureCtx()
-				if subscriptionWalk {
+				if failure.subscriptionWalk {
 					svc.WithManagedSubscriptions(&stateModelLeaser{activeProviders: map[subscriptions.Provider]bool{subscriptions.ProviderClaude: true}})
 					ctx = context.WithValue(ctx, ManagedSubscriptionProvidersContextKey{}, map[auth.SubscriptionProvider]struct{}{auth.SubscriptionProviderClaude: {}})
 					ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenActiveContextKey{}, []string{rescuedPrimaryModel})
@@ -127,6 +140,37 @@ func (c *recoveryJSONClient) Proxy(ctx context.Context, decision router.Decision
 	return err
 }
 
+type nativeRecoveryClient struct{ recoveryJSONClient }
+
+func (c *nativeRecoveryClient) Proxy(ctx context.Context, decision router.Decision, prepared providers.PreparedRequest, writer http.ResponseWriter, request *http.Request) error {
+	if decision.Model == rescuedPrimaryModel {
+		return &providers.UpstreamErrorResponse{Status: http.StatusBadGateway}
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	_, err := io.WriteString(writer, `{"id":"synthetic","type":"message","role":"assistant","content":[{"type":"text","text":"recovered"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":2}}`)
+	return err
+}
+
+func TestUpstreamRecoveryNoticeBeforeNativeResponseHeaders(t *testing.T) {
+	sonnet := catalog.ModelIDClaudeSonnet55.String()
+	decision := rescuableDecision("cluster:test", true)
+	decision.Metadata.CandidateModels = []string{rescuedPrimaryModel, sonnet}
+	decision.Metadata.CandidateProviders = map[string]string{sonnet: providers.ProviderAnthropic}
+	svc := NewService(staticRouter{decision: decision}, map[string]providers.Client{providers.ProviderAnthropic: &nativeRecoveryClient{}}, nil, false, nil, nil, false, "", "", nil).
+		WithAvailableModels(modelSet([]string{rescuedPrimaryModel, sonnet})).
+		WithDeploymentKeyedProviders(modelSet([]string{providers.ProviderAnthropic})).
+		WithRetrySleep(func(context.Context, time.Duration) error { return nil })
+	body := fmt.Sprintf(`{"model":%q,"max_tokens":1024,"messages":[{"role":"user","content":"synthetic task"}]}`, rescuedPrimaryModel)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, routePathMessages, nil)
+	request.Header.Set(routingMarkerHeader, "off")
+	err := svc.ProxyMessages(rescuedFailureCtx(), []byte(body), recorder, request)
+	require.NoError(t, err)
+	require.Contains(t, recorder.Body.String(), "recovered")
+	require.Equal(t, "Upstream provider anthropic is unavailable; rerouting this request to "+sonnet, recorder.Result().Header.Get(HeaderRouterNotice))
+}
+
 func TestUpstreamRecoveryNoticeAcrossResponseFormats(t *testing.T) {
 	for _, surface := range []string{routePathMessages, routePathChatCompletions, routePathResponses} {
 		for _, streaming := range []bool{false, true} {
@@ -157,12 +201,13 @@ func TestUpstreamRecoveryNoticeAcrossResponseFormats(t *testing.T) {
 					if recoveryFails {
 						require.Error(t, err)
 						require.NotContains(t, recorder.Body.String(), "Upstream provider")
+						require.Empty(t, recorder.Result().Header.Get(HeaderRouterNotice))
 					} else {
 						require.NoError(t, err)
 						if streaming {
 							require.Contains(t, recorder.Body.String(), "Upstream provider anthropic is unavailable; rerouting this request to "+rescuerModel)
 						} else {
-							require.Equal(t, "Upstream provider anthropic is unavailable; rerouting this request to "+rescuerModel, recorder.Header().Get(HeaderRouterNotice))
+							require.Equal(t, "Upstream provider anthropic is unavailable; rerouting this request to "+rescuerModel, recorder.Result().Header.Get(HeaderRouterNotice))
 						}
 					}
 				})

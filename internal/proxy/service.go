@@ -872,8 +872,7 @@ type modelAttemptFailure struct {
 type modelAttemptFailures []modelAttemptFailure
 
 func (failures *modelAttemptFailures) record(decision router.Decision, err error) {
-	if !providers.IsRetryable(err) || isSubscriptionPoolError(err) || providers.IsUpstreamModelNotFound(err) ||
-		upstreamStatus(err) == 0 && !providers.IsResponseHeaderTimeout(err) && !isUpstreamWatchdogError(err) {
+	if !providers.IsRetryable(err) || isSubscriptionPoolError(err) || providers.IsUpstreamModelNotFound(err) {
 		return
 	}
 	for index, failure := range *failures {
@@ -3986,6 +3985,7 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 		s.recordPolicyPinRouteFailure(ctx, requestID, requestStart, feats.Model, routeRes.TurnType, inboundUserPrompt, routeErr)
 		return routeErr
 	}
+	req.ClassifierPrediction = routeRes.ClassifierPrediction
 	ctx = requestcontext.WithCallerModelPassthrough(ctx, routeRes.CallerModelPassthrough)
 	if preparingHandoff(ctx) {
 		return s.finishHandoffPreparation(ctx, w, env, req, routeRes)
@@ -5557,7 +5557,7 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 			}
 		}
 		for _, failure := range modelFailures {
-			if !failoverAttempted || failure.decision.Model == decision.Model || failure.decision.Model == rescuedArmDemoted {
+			if !failoverAttempted || failure.decision.Model == decision.Model || failure.decision.Model == rescuedArmDemoted || failure.decision.Model == armDemoted {
 				continue
 			}
 			demoted, reason := s.maybeStrikeArmAfterRescuedFailure(ctx, true, routeRes.HardPinned, failure.err, failure.decision, installationID, routeRes.SessionKey, stickyStateRole(routeRes), routeRes.PinRole)
@@ -7153,6 +7153,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 		s.recordPolicyPinRouteFailure(ctx, requestID, requestStart, feats.Model, routeRes.TurnType, inboundUserPromptOAI, err)
 		return err
 	}
+	routeRequest.ClassifierPrediction = routeRes.ClassifierPrediction
 	ctx = requestcontext.WithCallerModelPassthrough(ctx, routeRes.CallerModelPassthrough)
 	if len(routeRes.SessionDisabledProviders) > 0 {
 		ctx = context.WithValue(ctx, SessionDisabledProvidersContextKey{}, routeRes.SessionDisabledProviders)
@@ -7996,8 +7997,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 			alternativeEffort := s.resolveEffort(ctx, target, alternativeOpts.Capabilities, routeRes.EscalateEffort)
 			alternativeEffort.apply(&alternativeOpts)
 			alternativeMarker := suppressMarkerIfRequested(ctx, r.Header, modelSelectionMarkerForRequest(ctx, routeRes, modelFailureRoutingMarkerFor(routeRes, target.Model, modelFailures), target.Model, markerReasonSibling))
-			alternativeAttempt, buildErr := buildAttempt(target, alternativeOpts, alternativeMarker)
-			return alternativeAttempt, buildErr
+			return buildAttempt(target, alternativeOpts, alternativeMarker)
 		},
 		onAlternative: func(target router.Decision) {
 			decision = target
@@ -8522,7 +8522,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 		}
 		s.maybeExpireSubscriptionArmPin(ctx, primarySubscriptionArmFailure, decision.Reason, installationIDFromContext(ctx), routeRes.SessionKey, stickyStateRole(routeRes))
 		for _, failure := range modelFailures {
-			if !failoverAttempted || failure.decision.Model == decision.Model || failure.decision.Model == rescuedArmDemotedOAI {
+			if !failoverAttempted || failure.decision.Model == decision.Model || failure.decision.Model == rescuedArmDemotedOAI || failure.decision.Model == armDemotedOAI {
 				continue
 			}
 			if demoted, reason := s.maybeStrikeArmAfterRescuedFailure(ctx, true, routeRes.HardPinned, failure.err, failure.decision, installationIDFromContext(ctx), routeRes.SessionKey, stickyStateRole(routeRes), routeRes.PinRole); demoted != "" {
