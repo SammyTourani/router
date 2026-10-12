@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -291,23 +292,10 @@ func lookupForceModelName(name string) (string, bool) {
 // foldModelSpelling treats every run of '.', '_', ' ' and '-' as one '-', so
 // "claude-opus-5.5", "opus 5.5" and "opus_5_5" spell the same name. Edge
 // separators are kept, so a truncated "gpt-" never folds onto "gpt".
+var modelSpellingSeparators = regexp.MustCompile(`[._ -]+`)
+
 func foldModelSpelling(name string) string {
-	var b strings.Builder
-	b.Grow(len(name))
-	inSep := false
-	for _, r := range name {
-		switch r {
-		case '.', '_', ' ', '-':
-			if !inSep {
-				b.WriteByte('-')
-			}
-			inSep = true
-		default:
-			b.WriteRune(r)
-			inSep = false
-		}
-	}
-	return b.String()
+	return modelSpellingSeparators.ReplaceAllString(name, "-")
 }
 
 // cutSpelledEffort splits an effort level typed without the colon
@@ -331,12 +319,12 @@ func forceModelNames() map[string]string {
 			continue
 		}
 		names[m.ID] = m.ID
-		if family, ok := strings.CutPrefix(m.ID, "claude-"); ok {
-			names[family] = m.ID
+		if unprefixed, ok := strings.CutPrefix(m.ID, "claude-"); ok {
+			names[unprefixed] = m.ID
 		}
 	}
-	for tail, id := range bareCatalogNames {
-		names[tail] = id
+	for bare, id := range bareCatalogNames {
+		names[bare] = id
 	}
 	for alias, id := range forceModelAliases {
 		names[alias] = id
