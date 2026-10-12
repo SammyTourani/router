@@ -111,6 +111,14 @@ check "Windows opener hands the full URL to the URL protocol handler" \
   "url.dll,FileProtocolHandler
 https://app.example.test/continue?source=router&ok=1" "$(cat "$work/windows-opener.log")"
 
+mkdir -p "$win_home/failing-bin"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 1' >"$win_home/failing-bin/rundll32.exe"
+chmod +x "$win_home/failing-bin/rundll32.exe"
+win_fail_rc=0
+PATH="$win_home/failing-bin:$win_home/bin:$PATH" \
+  open_url_in_browser 'https://app.example.test/continue?source=router&ok=1' || win_fail_rc=$?
+check "Windows opener reports a rundll32 failure" "1" "$win_fail_rc"
+
 if [ "$fail" -gt 0 ]; then
   printf '\n%d passed, %d failed\n' "$pass" "$fail" >&2
   exit 1
