@@ -3,7 +3,7 @@
 // another installation beyond the npx command they already ran.
 
 const fs = require("node:fs");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawn } = require("node:child_process");
 const path = require("node:path");
 const { emitKeypressEvents } = require("node:readline");
 const readline = require("node:readline/promises");
@@ -24,13 +24,14 @@ async function main() {
   ({ patch: patchToml } = await import("@decimalturn/toml-patch"));
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log("Usage: npx @weave-os/router [--claude|--codex|--opencode|--pi] [--scope user|project] [--dir PATH] [--base-url URL] [--uninstall]");
+    console.log("Usage: npx @weave-os/router [--claude|--codex|--opencode|--pi] [--scope user|project] [--dir PATH] [--base-url URL] [--email EMAIL] [--return-url URL] [--non-interactive] [--uninstall]");
     console.log("On Windows, install and uninstall run natively in Node.js; no Git Bash or jq is needed.");
     return;
   }
   if (options.mode !== "install" && options.mode !== "uninstall") {
     throw new Error("This Windows release supports install and --uninstall. Other router commands are not yet available natively.");
   }
+  if (options.returnUrl && options.mode !== "install") throw new Error("--return-url is supported only for install.");
   if (options.scope === "project" && !options.directory) {
     options.directory = findGitRoot(process.cwd());
     if (!options.directory) throw new Error("--scope project must run inside a git repo, or pass --dir <path>.");
@@ -60,10 +61,8 @@ async function main() {
   }
   if (!key) throw new Error("No key provided.");
 
-  const keyIsValid = await fetch(`${baseUrl}/validate`, {
-    headers: { "X-Weave-Router-Key": key },
-    signal: AbortSignal.timeout(5000),
-  }).then((response) => response.ok).catch(() => false);
+  const routerIsHealthy = await probe(`${baseUrl}/health`, {});
+  const keyIsValid = await probe(`${baseUrl}/validate`, { "X-Weave-Router-Key": key });
   if (!keyIsValid) console.warn("Warning: could not validate the key. Check the router URL and key if requests fail.");
 
   const email = options.email || process.env.WEAVE_USER_EMAIL || "";
@@ -73,6 +72,29 @@ async function main() {
   else if (target === "opencode") installOpenCode(paths, baseUrl, key, email);
   else installPi(paths, baseUrl, key, email);
   console.log(`Weave Router configured for ${target} at ${paths.config}.`);
+  if (!options.returnUrl) return;
+  if (!routerIsHealthy || !keyIsValid) {
+    console.warn("Skipping return URL because router verification did not complete successfully.");
+  } else if (await openInBrowser(options.returnUrl)) {
+    console.log(`Opened return URL in your browser: ${options.returnUrl}`);
+  } else {
+    console.warn(`Install succeeded, but no browser could be opened. Open this URL to continue: ${options.returnUrl}`);
+  }
+}
+
+function probe(url, headers) {
+  return fetch(url, { headers, signal: AbortSignal.timeout(5000) }).then((response) => response.ok).catch(() => false);
+}
+
+// explorer.exe is a direct process launch; `cmd /c start` would parse the
+// URL's '&' query separators as shell syntax. Its exit status is meaningless.
+function openInBrowser(url) {
+  const [opener, ignoreExitStatus] = process.platform === "win32" ? ["explorer.exe", true] : process.platform === "darwin" ? ["open", false] : ["xdg-open", false];
+  return new Promise((resolve) => {
+    const child = spawn(opener, [url], { stdio: "ignore", windowsHide: true });
+    child.once("error", () => resolve(false));
+    child.once("exit", (code) => resolve(ignoreExitStatus || code === 0));
+  });
 }
 
 function parseArgs(args) {
@@ -84,7 +106,7 @@ function parseArgs(args) {
     else if (arg === "--non-interactive") options.nonInteractive = true;
     else if (arg === "--local") options.baseUrl = "http://localhost:8080";
     else if (arg === "-h" || arg === "--help") options.help = true;
-    else if (["--scope", "--dir", "--base-url", "--email"].includes(arg)) {
+    else if (["--scope", "--dir", "--base-url", "--email", "--return-url"].includes(arg)) {
       const value = args[++index];
       if (!value) throw new Error(`${arg} requires a value.`);
       if (arg === "--scope") {
@@ -92,7 +114,10 @@ function parseArgs(args) {
         options.scope = value;
       } else if (arg === "--dir") { options.directory = value; options.explicitDirectory = true; }
       else if (arg === "--base-url") options.baseUrl = value;
-      else options.email = value;
+      else if (arg === "--return-url") {
+        if (!/^https?:\/\//.test(value)) throw new Error("--return-url must be an http:// or https:// URL.");
+        options.returnUrl = value;
+      } else options.email = value;
     } else if (arg === "install" || arg === "setup") {
       if (arg === "setup") throw new Error("'setup' is not yet available in the native Windows installer; choose one client with --claude or --codex.");
     } else if (["off", "--off", "on", "--on", "status", "--status", "update", "--update", "models", "accounts", "login", "disable-routing"].includes(arg)) {

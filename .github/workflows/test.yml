@@ -337,6 +337,34 @@ jobs:
           make test-install
           bash install/pi-router/test/opencode_smoke.sh
 
+  test-install-windows:
+    name: Test native Windows installer
+    needs: changed-paths
+    if: ${{ needs.changed-paths.outputs.installer == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.12.0
+
+      - name: Run native Windows installer tests
+        shell: pwsh
+        run: |
+          npm install --prefix install/npm --ignore-scripts --package-lock=false --no-audit --no-fund
+          node --test install/npm/windows.test.js
+
+      - name: Check the npm package ships the native installer
+        shell: pwsh
+        working-directory: install/npm
+        run: |
+          $files = (npm pack --dry-run --json | ConvertFrom-Json).files.path
+          if ($files -notcontains "windows.js") { throw "windows.js missing from npm package" }
+
   test-task-domain:
     name: Test task domain service contract
     needs: changed-paths
