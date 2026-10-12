@@ -615,7 +615,7 @@ routing on, so a typo can't look like it took effect.
 
 | Header | Effect |
 | ------ | ------ |
-| `x-weave-force-model` | Pins the session to one model, exactly as `/force-model` does — same exact-match rule. Accepts a canonical catalog ID, a bare name, or an alias (`opus`, `gpt`, `qwen-max`, …) plus an optional `:level` effort suffix (`opus:high`). A value naming no catalog model is HTTP 400. |
+| `x-weave-force-model` | Pins the session to one model, exactly as `/force-model` does — same exact-match rule. Accepts a canonical catalog ID, a bare name, or an alias (`opus`, `gpt`, `qwen-max`, …) plus an optional `:level` effort suffix (`opus:high`). Separator spelling doesn't matter (`claude-opus-5.5`, `opus 5.5`, and `claude-opus-5-5` are one name), the `claude-` prefix and Claude Code's `[1m]` tag are optional, and the effort may follow a space or dash (`astra high`). A spelling that two models share is rejected rather than guessed. A value naming no catalog model is HTTP 400. |
 | `x-weave-force-cluster` | Constrains serving to one of the policy sidecar's routing clusters, leaving the choice *within* it to the policy. |
 
 `x-weave-force-cluster` takes an opaque label — the router holds no list of

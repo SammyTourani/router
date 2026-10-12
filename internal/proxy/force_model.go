@@ -196,6 +196,11 @@ var forceModelAliases = map[string]string{
 	"mistral":       "mistralai/mistral-small-2603",
 }
 
+// forceModelExamples follows the family aliases so the unknown-model hint
+// never names a retired release.
+var forceModelExamples = fmt.Sprintf("opus, %s, %s, or %s",
+	forceModelAliases["opus"], forceModelAliases["gpt"], forceModelAliases["gemini"])
+
 // resolveForceModel is the legacy two-return surface. New pin-and-effort
 // callers use resolveForceModelWithEffort.
 func resolveForceModel(model string) (canonicalID, provider string, known bool) {
@@ -207,9 +212,9 @@ func resolveForceModel(model string) (canonicalID, provider string, known bool) 
 // `:level` suffix. `known` is true only for catalog matches; known=false +
 // effort!="" lets callers surface "model not found" without losing the effort.
 //
-// Matching is exact: no prefix, substring, or nearest-match fallback.
-// Approximate matching silently served the wrong model; an unrecognized
-// name must fail loudly instead.
+// Matching is exact up to separator spelling (see foldModelSpelling): no
+// prefix, substring, or nearest-match fallback. Approximate matching silently
+// served the wrong model; an unrecognized name must fail loudly instead.
 func resolveForceModelWithEffort(model string) (canonicalID, provider string, known bool, effort string) {
 	effortLevel, stripped := stripEffortSuffix(model)
 	model = stripped
@@ -222,13 +227,22 @@ func resolveForceModelWithEffort(model string) (canonicalID, provider string, kn
 		unknownID = nativeID
 		requiredProvider = providers.ProviderOpenAI
 	}
-	if alias, ok := forceModelAliases[model]; ok {
-		model = alias
-	} else if canonical, ok := bareCatalogNames[model]; ok {
-		model = canonical
+	if variant, ok := translate.CanonicalModel(model); ok {
+		model = variant
+		unknownID = variant
 	}
-	if m, ok := catalog.ByID(model); ok && len(m.Providers) > 0 && (requiredProvider == "" || m.Providers[0].Provider == requiredProvider) {
-		return m.ID, m.Providers[0].Provider, true, effort
+	if id, ok := lookupForceModelName(model); ok {
+		if m, ok := servableForceModel(id, requiredProvider); ok {
+			return m.ID, m.Providers[0].Provider, true, effort
+		}
+	} else if effort == "" {
+		if head, level, ok := cutSpelledEffort(model); ok {
+			if id, ok := lookupForceModelName(head); ok {
+				if m, ok := servableForceModel(id, requiredProvider); ok {
+					return m.ID, m.Providers[0].Provider, true, router.CanonicalizeEffort(level)
+				}
+			}
+		}
 	}
 	if requiredProvider != "" {
 		return unknownID, requiredProvider, false, effort
@@ -248,6 +262,106 @@ func resolveForceModelWithEffort(model string) (canonicalID, provider string, kn
 		return model, providers.ProviderAnthropic, false, effort
 	}
 }
+
+func servableForceModel(id, requiredProvider string) (catalog.Model, bool) {
+	m, ok := catalog.ByID(id)
+	if !ok || len(m.Providers) == 0 || (requiredProvider != "" && m.Providers[0].Provider != requiredProvider) {
+		return catalog.Model{}, false
+	}
+	return m, true
+}
+
+// lookupForceModelName resolves an exact alias, bare catalog name, or catalog
+// ID, then the same names with separators folded. Folding never guesses: it
+// only reaches keys that differ from a real name in separator spelling.
+func lookupForceModelName(name string) (string, bool) {
+	if alias, ok := forceModelAliases[name]; ok {
+		return alias, true
+	}
+	if canonical, ok := bareCatalogNames[name]; ok {
+		return canonical, true
+	}
+	if _, ok := catalog.ByID(name); ok {
+		return name, true
+	}
+	id, ok := foldedForceModelNames[foldModelSpelling(name)]
+	return id, ok
+}
+
+// foldModelSpelling treats every run of '.', '_', ' ' and '-' as one '-', so
+// "claude-opus-5.5", "opus 5.5" and "opus_5_5" spell the same name. Edge
+// separators are kept, so a truncated "gpt-" never folds onto "gpt".
+func foldModelSpelling(name string) string {
+	var b strings.Builder
+	b.Grow(len(name))
+	inSep := false
+	for _, r := range name {
+		switch r {
+		case '.', '_', ' ', '-':
+			if !inSep {
+				b.WriteByte('-')
+			}
+			inSep = true
+		default:
+			b.WriteRune(r)
+			inSep = false
+		}
+	}
+	return b.String()
+}
+
+// cutSpelledEffort splits an effort level typed without the colon
+// ("astra high", "gpt-6-sol-max") off the end of name.
+func cutSpelledEffort(name string) (head, level string, ok bool) {
+	folded := foldModelSpelling(name)
+	idx := strings.LastIndexByte(folded, '-')
+	if idx <= 0 || !looksLikeEffortAlias(folded[idx+1:]) {
+		return "", "", false
+	}
+	return folded[:idx], folded[idx+1:], true
+}
+
+// forceModelNames lists every exact name /force-model accepts, keyed to its
+// catalog ID: servable catalog IDs, Claude IDs without "claude-", aliases,
+// and bare catalog names.
+func forceModelNames() map[string]string {
+	names := make(map[string]string, len(catalog.Models)*2+len(forceModelAliases))
+	for _, m := range catalog.Models {
+		if len(m.Providers) == 0 {
+			continue
+		}
+		names[m.ID] = m.ID
+		if family, ok := strings.CutPrefix(m.ID, "claude-"); ok {
+			names[family] = m.ID
+		}
+	}
+	for tail, id := range bareCatalogNames {
+		names[tail] = id
+	}
+	for alias, id := range forceModelAliases {
+		names[alias] = id
+	}
+	return names
+}
+
+// foldedForceModelNames indexes forceModelNames by folded spelling. A folded
+// key that two names share for different models is dropped rather than
+// guessed; TestFoldedForceModelNames_Unambiguous asserts the invariant.
+var foldedForceModelNames = func() map[string]string {
+	out := make(map[string]string)
+	ambiguous := make(map[string]bool)
+	for name, id := range forceModelNames() {
+		key := foldModelSpelling(name)
+		if prev, seen := out[key]; seen && prev != id {
+			ambiguous[key] = true
+		}
+		out[key] = id
+	}
+	for key := range ambiguous {
+		delete(out, key)
+	}
+	return out
+}()
 
 // bareCatalogNames maps a slash-form model's bare tail to its canonical
 // ID ("qwen3-coder" -> "qwen/qwen3-coder") for vendor-prefix-optional lookup.
@@ -631,9 +745,9 @@ func (s *Service) applyForceModelCommand(
 			"force_model_session_key_hex", fmt.Sprintf("%x", forceModelSessionKey),
 			"role", forceModelSessionRole,
 		)
-		msg = fmt.Sprintf("✦ **Weave Router** → force-model: %q isn't a recognized model · keeping automatic routing. Use a full model ID, e.g. claude-opus-5, gpt-5.5, or gemini-3-pro-preview.\n\n", cmd.Model)
+		msg = fmt.Sprintf("✦ **Weave Router** → force-model: %q isn't a recognized model · keeping automatic routing. Use a model ID or shorthand, e.g. %s.\n\n", cmd.Model, forceModelExamples)
 		if env.SourceFormat() == translate.FormatOpenAI {
-			msg = fmt.Sprintf("Weave Router: force-model: %q isn't a recognized model; keeping automatic routing. Use a full model ID, e.g. claude-opus-5, gpt-5.5, or gemini-3-pro-preview.", cmd.Model)
+			msg = fmt.Sprintf("Weave Router: force-model: %q isn't a recognized model; keeping automatic routing. Use a model ID or shorthand, e.g. %s.", cmd.Model, forceModelExamples)
 		}
 		return "", msg, nil
 	}
