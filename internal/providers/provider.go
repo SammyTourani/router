@@ -232,6 +232,22 @@ func RequiresBaseURL(provider string) bool {
 	return ok
 }
 
+// reasoningExcludedFromOutputProviders report completion_tokens_details.reasoning_tokens
+// on top of completion_tokens rather than inside it (xAI: prompt + completion +
+// reasoning = total_tokens), while billing reasoning at the output rate. Every
+// other OpenAI-compatible upstream, OpenRouter's xAI route included, folds
+// reasoning into completion_tokens as OpenAI does.
+var reasoningExcludedFromOutputProviders = map[string]struct{}{
+	ProviderXAI: {},
+}
+
+// OutputExcludesReasoning reports whether this provider's reported output token
+// count omits its reasoning tokens, so billed output is output + reasoning.
+func OutputExcludesReasoning(provider string) bool {
+	_, ok := reasoningExcludedFromOutputProviders[provider]
+	return ok
+}
+
 // CacheTTL is the best-effort upstream prompt-cache lifetime per provider.
 // Anthropic's 1h extended cache is what pinSessionTTL is sized to; OSS
 // OpenAI-compatible providers cache on an undocumented minutes-scale window,

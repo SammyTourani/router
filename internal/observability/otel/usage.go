@@ -212,10 +212,15 @@ func (u *UsageExtractor) OutputLimitReached() bool {
 	return u != nil && u.outputLimitReached
 }
 
-// Tokens returns the extracted input and output token counts.
+// Tokens returns the extracted input and billed output token counts. Output
+// includes reasoning even for providers that report it separately, so cost
+// and telemetry never undercount a reasoning turn.
 func (u *UsageExtractor) Tokens() (input, output int) {
 	if u == nil {
 		return 0, 0
+	}
+	if providers.OutputExcludesReasoning(u.provider) {
+		return u.input, u.output + u.reasoning
 	}
 	return u.input, u.output
 }
