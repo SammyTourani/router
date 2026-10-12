@@ -362,7 +362,7 @@ jobs:
         shell: pwsh
         working-directory: install/npm
         run: |
-          $files = (npm pack --dry-run --json | ConvertFrom-Json).files.path
+          $files = (npm pack --dry-run --json --ignore-scripts | ConvertFrom-Json).files.path
           if ($files -notcontains "windows.js") { throw "windows.js missing from npm package" }
 
   test-task-domain:
