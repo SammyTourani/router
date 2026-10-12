@@ -872,7 +872,7 @@ type modelAttemptFailure struct {
 type modelAttemptFailures []modelAttemptFailure
 
 func (failures *modelAttemptFailures) record(decision router.Decision, err error) {
-	if !providers.IsRetryable(err) || isSubscriptionPoolError(err) || providers.IsUpstreamModelNotFound(err) {
+	if !providers.IsRetryable(err) || !isRescuedPrimaryFailure(err) {
 		return
 	}
 	for index, failure := range *failures {

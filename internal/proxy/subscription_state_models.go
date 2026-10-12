@@ -145,6 +145,15 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 	}
 	in.subscriptionStateRequest = nil
 	in.alternatives = nil
+	onModelFailure := in.onModelFailure
+	in.onModelFailure = func(failed router.Decision, err error) {
+		if providers.IsRetryable(err) && isRescuedPrimaryFailure(err) {
+			request.AutomaticExcludedModels = mergeExcludedModels(request.AutomaticExcludedModels, modelSet([]string{failed.Model}))
+		}
+		if onModelFailure != nil {
+			onModelFailure(failed, err)
+		}
+	}
 	activeModels := make([]string, 0)
 	for _, model := range s.subscriptionStateCandidates(ctx, request, in.initialDecision.Model) {
 		if s.subscriptionStateModelAvailable(ctx, request, in.subscriptionStateHeaders, model) {
@@ -203,9 +212,6 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 			return winner, err
 		}
 		observability.FromContext(ctx).Info("Subscription model unavailable; selecting another included target", "model", target.Model, "provider", target.Provider)
-		if providers.IsRetryable(err) {
-			request.AutomaticExcludedModels = mergeExcludedModels(request.AutomaticExcludedModels, modelSet([]string{target.Model}))
-		}
 		remainingModels := activeModels[:0]
 		for _, model := range activeModels {
 			if model != target.Model {
