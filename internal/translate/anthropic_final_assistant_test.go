@@ -125,3 +125,29 @@ func TestAnthropicFinalAssistantDroppedForPrefillUnsupportedModel(t *testing.T) 
 	require.Len(t, messages, 1)
 	assert.Equal(t, "user", messages[0].Get("role").String())
 }
+
+func TestAnthropicFinalAssistantPrefillUnsupportedBoundaries(t *testing.T) {
+	cases := []struct {
+		name, messages string
+		wantRoles      []string
+	}{
+		{"repeated trailing assistants", `[{"role":"user","content":"Q"},{"role":"assistant","content":"a"},{"role":"assistant","content":"b"}]`, []string{"user"}},
+		{"trailing tool_use", `[{"role":"user","content":"Q"},{"role":"assistant","content":[{"type":"text","text":"Running"},{"type":"tool_use","id":"t1","name":"ls","input":{}}]}]`, []string{"user"}},
+		{"tool result history kept", `[{"role":"user","content":"Q"},{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"ls","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},{"role":"assistant","content":"partial"}]`, []string{"user", "assistant", "user"}},
+		{"user ending unchanged", `[{"role":"user","content":"Q"},{"role":"assistant","content":"a"},{"role":"user","content":"R"}]`, []string{"user", "assistant", "user"}},
+		{"sole message kept", `[{"role":"assistant","content":"a"}]`, []string{"assistant"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			envelope, err := translate.ParseAnthropic([]byte(`{"model":"claude-opus-5-5","messages":` + tc.messages + `}`))
+			require.NoError(t, err)
+			prepared, err := envelope.PrepareAnthropic(http.Header{}, translate.EmitOptions{TargetModel: "claude-opus-5-5", Capabilities: router.Lookup("claude-opus-5-5"), TargetProvider: providers.ProviderAnthropic})
+			require.NoError(t, err)
+			var roles []string
+			for _, message := range gjson.GetBytes(prepared.Body, "messages").Array() {
+				roles = append(roles, message.Get("role").String())
+			}
+			assert.Equal(t, tc.wantRoles, roles)
+		})
+	}
+}
