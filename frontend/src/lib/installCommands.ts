@@ -12,7 +12,7 @@ export type HarnessID = "claude" | "codex" | "pi";
 /** Whether the installer writes machine-wide config or repo-local config. */
 export type InstallScope = "user" | "project";
 
-/** The shell the install command is pasted into. */
+/** Terminal the install command is pasted into; selects the env-var syntax in installCommand. */
 export type InstallShell = "posix" | "powershell";
 
 export const INSTALL_SHELLS: { value: InstallShell; label: string }[] = [
@@ -107,6 +107,6 @@ function shellSingleQuote(value: string): string {
 }
 
 /** Wraps a value in PowerShell single quotes, where an embedded quote is doubled. */
-function powerShellSingleQuote(value: string): string {
+function powerShellSingleQuote(value: string) {
   return `'${value.replaceAll("'", "''")}'`;
 }

@@ -82,6 +82,15 @@ async function main() {
   }
 }
 
+// URL.parse needs Node 22; the package supports Node 18.
+function safeUrlProtocol(value) {
+  try {
+    return new URL(value).protocol;
+  } catch {
+    return "";
+  }
+}
+
 function probe(url, headers) {
   return fetch(url, { headers, signal: AbortSignal.timeout(5000) }).then((response) => response.ok).catch(() => false);
 }
@@ -115,7 +124,7 @@ function parseArgs(args) {
       } else if (arg === "--dir") { options.directory = value; options.explicitDirectory = true; }
       else if (arg === "--base-url") options.baseUrl = value;
       else if (arg === "--return-url") {
-        if (!/^https?:\/\//.test(value)) throw new Error("--return-url must be an http:// or https:// URL.");
+        if (!/^https?:$/.test(safeUrlProtocol(value))) throw new Error("--return-url must be an http:// or https:// URL.");
         options.returnUrl = value;
       } else options.email = value;
     } else if (arg === "install" || arg === "setup") {
