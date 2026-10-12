@@ -79,6 +79,23 @@ func TestForceModelCommand_TypedUnknownKeepsRouting(t *testing.T) {
 	}
 }
 
+func TestForceModelCommand_TypoSuggestsWithoutPinning(t *testing.T) {
+	store := &recordingPinStore{}
+	svc := NewService(nil, nil, nil, false, nil, store, false,
+		providers.ProviderAnthropic, "claude-haiku-4-5", nil)
+	env := typedCommandEnv(t, "/fm opsu")
+	cmd, found := env.ExtractForceModelCommand()
+	require.True(t, found, "command parsed")
+
+	rec := httptest.NewRecorder()
+	require.NoError(t, svc.handleForceModelCommand(context.Background(), rec, env, cmd,
+		uuid.New(), DeriveSessionKey(env, "key-1"), DeriveSessionKey(env, "key-1"), 10))
+
+	assert.Empty(t, store.upserts, "a suggestion never pins")
+	assert.Contains(t, rec.Body.String(), "isn't a recognized model")
+	assert.Contains(t, rec.Body.String(), `Did you mean \"opus\"?`)
+}
+
 func typedCommandEnv(t *testing.T, text string) *translate.RequestEnvelope {
 	t.Helper()
 	body, err := json.Marshal(map[string]any{

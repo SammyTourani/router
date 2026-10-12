@@ -352,6 +352,117 @@ var foldedForceModelNames = func() map[string]string {
 	return out
 }()
 
+type forceModelSuggestion struct{ name, id string }
+
+// preferredOver orders display names: shortest, then the catalog ID's own
+// spelling, then lexical, so the choice is deterministic.
+func (c forceModelSuggestion) preferredOver(o forceModelSuggestion) bool {
+	if len(c.name) != len(o.name) {
+		return len(c.name) < len(o.name)
+	}
+	if (c.name == c.id) != (o.name == o.id) {
+		return c.name == c.id
+	}
+	return c.name < o.name
+}
+
+// forceModelSuggestions holds one display name per unambiguous folded key:
+// the shortest accepted name, so "opsu" suggests "opus", not a full ID.
+var forceModelSuggestions = func() map[string]forceModelSuggestion {
+	out := make(map[string]forceModelSuggestion, len(foldedForceModelNames))
+	for name := range forceModelNames() {
+		key := foldModelSpelling(name)
+		id, ok := foldedForceModelNames[key]
+		if !ok {
+			continue
+		}
+		cand := forceModelSuggestion{name: name, id: id}
+		if prev, seen := out[key]; seen && !cand.preferredOver(prev) {
+			continue
+		}
+		out[key] = cand
+	}
+	return out
+}()
+
+// suggestForceModel names the accepted spelling nearest an unrecognized input
+// for a "did you mean" hint. It is display-only and never feeds resolution.
+// Candidates must keep the input's digits: a near-miss version ("gpt-6-1" vs
+// "gpt-4.1") is a different model, not a typo. It returns "" when nothing is
+// within a small edit distance or the nearest names belong to different models.
+func suggestForceModel(input string) string {
+	effort, model := stripEffortSuffix(input)
+	model, _ = translate.CanonicalModel(strings.ToLower(strings.TrimSpace(model)))
+	key := foldModelSpelling(model)
+	if len(key) < 3 {
+		return ""
+	}
+	maxDist := 1
+	if len(key) > 5 {
+		maxDist = 2
+	}
+	digits := digitsOf(key)
+	var best forceModelSuggestion
+	bestDist, ambiguous := maxDist+1, false
+	for k, cand := range forceModelSuggestions {
+		if digitsOf(k) != digits {
+			continue
+		}
+		d := editDistance(key, k)
+		switch {
+		case d < bestDist:
+			best, bestDist, ambiguous = cand, d, false
+		case d == bestDist && best.id != "" && cand.id != best.id:
+			ambiguous = true
+		case d == bestDist && cand.id == best.id && cand.preferredOver(best):
+			best = cand
+		}
+	}
+	if best.id == "" || ambiguous {
+		return ""
+	}
+	if effort != "" {
+		return best.name + ":" + effort
+	}
+	return best.name
+}
+
+func digitsOf(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, s)
+}
+
+// editDistance is the optimal-string-alignment distance: insertions,
+// deletions, substitutions, and adjacent transpositions ("astar" -> "astra").
+func editDistance(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	prev2 := make([]int, len(rb)+1)
+	prev := make([]int, len(rb)+1)
+	cur := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		cur[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+			if i > 1 && j > 1 && ra[i-1] == rb[j-2] && ra[i-2] == rb[j-1] {
+				cur[j] = min(cur[j], prev2[j-2]+1)
+			}
+		}
+		prev2, prev, cur = prev, cur, prev2
+	}
+	return prev[len(rb)]
+}
+
 // bareCatalogNames maps a slash-form model's bare tail to its canonical
 // ID ("qwen3-coder" -> "qwen/qwen3-coder") for vendor-prefix-optional lookup.
 // Tails that are ambiguous, match a full catalog ID, or duplicate an alias
@@ -729,14 +840,20 @@ func (s *Service) applyForceModelCommand(
 
 	canonicalModel, provider, known, effortLevel := resolveForceModelWithEffort(cmd.Model)
 	if !known {
+		suggestion := suggestForceModel(cmd.Model)
 		log.Info("/force-model: rejected unknown model",
 			"input_model", cmd.Model,
+			"suggested_model", suggestion,
 			"force_model_session_key_hex", fmt.Sprintf("%x", forceModelSessionKey),
 			"role", forceModelSessionRole,
 		)
-		msg = fmt.Sprintf("✦ **Weave Router** → force-model: %q isn't a recognized model · keeping automatic routing. Use a model ID or shorthand, e.g. %s.\n\n", cmd.Model, forceModelExamples)
+		hint := "Use a model ID or shorthand, e.g. " + forceModelExamples + "."
+		if suggestion != "" {
+			hint = fmt.Sprintf("Did you mean %q?", suggestion)
+		}
+		msg = fmt.Sprintf("✦ **Weave Router** → force-model: %q isn't a recognized model · keeping automatic routing. %s\n\n", cmd.Model, hint)
 		if env.SourceFormat() == translate.FormatOpenAI {
-			msg = fmt.Sprintf("Weave Router: force-model: %q isn't a recognized model; keeping automatic routing. Use a model ID or shorthand, e.g. %s.", cmd.Model, forceModelExamples)
+			msg = fmt.Sprintf("Weave Router: force-model: %q isn't a recognized model; keeping automatic routing. %s", cmd.Model, hint)
 		}
 		return "", msg, nil
 	}
