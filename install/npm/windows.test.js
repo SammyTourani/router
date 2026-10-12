@@ -15,7 +15,9 @@ const packageDirectory = __dirname;
 let baseUrl;
 const server = http.createServer((request, response) => {
   const keyIsAccepted = request.headers["x-weave-router-key"] !== "rk_rejected";
-  response.writeHead(request.url === "/health" || (request.url === "/validate" && keyIsAccepted) ? 200 : 404);
+  const routerIsDown = request.url.startsWith("/down/");
+  const route = request.url.replace(/^\/down/, "");
+  response.writeHead((route === "/health" && !routerIsDown) || (route === "/validate" && keyIsAccepted) ? 200 : 404);
   response.end("{}");
 });
 
@@ -249,6 +251,7 @@ test("the return URL opens only after the router and key both verify", { skip: p
   const returnUrl = "https://app.example.test/continue?selection=enterprise&harness=claude_code";
   const env = { PATH: `${fakeBin}${path.delimiter}${process.env.PATH}` };
   await runInstallerAt(home, ["--claude", "--non-interactive", "--base-url", baseUrl, "--return-url", returnUrl], { envOverrides: { ...env, WEAVE_ROUTER_KEY: "rk_rejected" } });
+  await runInstallerAt(home, ["--claude", "--non-interactive", "--base-url", `${baseUrl}/down`, "--return-url", returnUrl], { envOverrides: env });
   assert.equal(fs.existsSync(openLog), false);
   await runInstallerAt(home, ["--claude", "--non-interactive", "--base-url", baseUrl, "--return-url", returnUrl], { envOverrides: env });
   assert.equal(fs.readFileSync(openLog, "utf8"), `${returnUrl}\n`);
