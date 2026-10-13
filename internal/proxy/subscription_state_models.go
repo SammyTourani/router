@@ -108,6 +108,8 @@ func readmitSessionStrikes(ctx context.Context, request *router.Request) bool {
 
 func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failoverInputs) (int, error) {
 	request := *in.subscriptionStateRequest
+	// The paid-target check below authorizes before dispatchPlanned marks the turn.
+	ctx = withClientAppRefusalPaidFallback(ctx, in.initialDecision)
 	sessionUnavailableModels := modelSet(sessionDemotedModelsFromContext(ctx))
 	if sessionUnavailableModels == nil {
 		sessionUnavailableModels = make(map[string]struct{})

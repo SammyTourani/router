@@ -13,6 +13,7 @@ import (
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/router/catalog"
+	"weave-os/router/internal/router/policy"
 	"weave-os/router/internal/subscriptions"
 	"weave-os/router/internal/translate"
 
@@ -293,4 +294,53 @@ func TestForcedThirdPartyRefusalPaysOnlyWhenKeyConsents(t *testing.T) {
 		assert.Equal(t, 1, upstream.subDispatches)
 		assert.Zero(t, upstream.paidDispatches, "a refusal is not quota proof for a routed turn")
 	})
+}
+
+func TestForcedThirdPartyRefusalPaysThroughSubscriptionStateModelsOnlyWhenKeyConsents(t *testing.T) {
+	for _, consented := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without consent", true: "with consent"}[consented], func(t *testing.T) {
+			upstream := &parityUpstream{subErr: thirdPartyRefusalError(), okBody: "served"}
+			svc := NewService(stateModelRouter{}, map[string]providers.Client{providers.ProviderAnthropic: upstream}, nil, false, nil, nil, false, "", "", nil).
+				WithManagedSubscriptions(&stateModelLeaser{activeProviders: map[subscriptions.Provider]bool{subscriptions.ProviderClaude: true}}).
+				WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}})
+			svc.retrySleep = noopSleep
+			ctx := WithManagedSubscriptionCandidates(managedSubscriptionTestContext(), []*auth.SubscriptionAccount{{
+				ID: "synthetic-claude", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive,
+			}})
+			if consented {
+				ctx = context.WithValue(ctx, APIKeyPaidFallbackOnSubscriptionRefusalContextKey{}, true)
+			}
+			ctx = clientAppContext(ctx, ClientAppOpencode)
+			ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenActiveContextKey{}, []string{stateClaudeModel})
+			ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenInactiveContextKey{}, []string{stateClaudeModel})
+			ctx = withTurnFailures(ctx)
+			req := router.Request{AllowedModels: allowedModelsForRequest(ctx), EnabledProviders: modelSet([]string{providers.ProviderAnthropic}), ForceModel: stateClaudeModel}
+			recorder := httptest.NewRecorder()
+			buffer := newPreludeBuffer(recorder)
+
+			_, err := svc.dispatchWithFallback(ctx, failoverInputs{
+				w: recorder, buf: buffer, subscriptionStateRequest: &req,
+				subscriptionStateWinnerProvider: new(string),
+				initialDecision:                 router.Decision{Model: stateClaudeModel, Provider: providers.ProviderAnthropic, Reason: translate.ReasonUserForceModel},
+				purpose:                         inference.PurposeAnthropicMessages,
+				origin:                          policy.OverrideSourceRequest,
+				buildAlternative: func(router.Decision) (dispatchAttempt, error) {
+					return func(attemptCtx context.Context, decision router.Decision, client providers.Client) error {
+						buffer.Seal()
+						return client.Proxy(attemptCtx, decision, providers.PreparedRequest{}, buffer, httptest.NewRequest(http.MethodPost, "/v1/messages", nil))
+					}, nil
+				},
+			})
+
+			assert.Equal(t, 1, upstream.subDispatches)
+			if consented {
+				require.NoError(t, err)
+				assert.Equal(t, "served", recorder.Body.String())
+				assert.Equal(t, 1, upstream.paidDispatches)
+				return
+			}
+			require.Error(t, err)
+			assert.Zero(t, upstream.paidDispatches)
+		})
+	}
 }
