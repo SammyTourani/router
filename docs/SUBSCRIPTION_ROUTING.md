@@ -22,13 +22,15 @@ allowlist. Explicit models stay fixed. Boost follows stable source ordering; Max
 retains its existing subscription exclusion. After eligible included capacity is
 exhausted, authorized API capacity serves the originally selected model unless
 subscription-aware model sets are configured. With those sets enabled, the
-active set limits included Claude/Codex targets and the exhausted set limits
-paid fallback. Exhausting Claude does not make its active-only models eligible
-for paid use while Codex remains available. Every selected included target must
-actually use a subscription; after eligible active targets are unavailable,
-the router selects a request-compatible model from the exhausted set. The
-installation allowlist and request safety constraints still apply to both sets.
-An empty enabled state refuses that funding lane. Disabling the sets retains
+active set is a preference for included Claude/Codex targets and the exhausted
+set limits paid fallback. Any request-compatible model a live subscription can
+serve stays eligible on included capacity, so a failed active-set model is
+rescued by another included model before paid fallback. Exhausting Claude does
+not make its models eligible for paid use while Codex remains available. Every
+selected included target must actually use a subscription; after included
+targets are unavailable, the router selects a request-compatible model from the
+exhausted set. The installation allowlist and request safety constraints still
+apply to both lanes. An empty exhausted set refuses paid fallback. Disabling the sets retains
 ordinary routing; Max continues to ignore linked subscriptions and these sets.
 Paid switch and compaction handover summaries respect the exhausted set instead
 of silently buying an active-only model. If a switch summary is rejected, the

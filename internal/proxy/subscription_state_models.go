@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"net/http"
+	"slices"
 
 	"weave-os/router/internal/billing"
 	"weave-os/router/internal/observability"
@@ -124,20 +125,15 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 	}
 	in.subscriptionStateRequest = nil
 	in.alternatives = nil
-	activeModels := make([]string, 0)
-	for _, model := range installationSubscriptionModelsWhenActiveFromContext(ctx) {
-		if s.subscriptionStateModelAvailable(ctx, request, in.subscriptionStateHeaders, model) {
-			activeModels = append(activeModels, model)
-		}
-	}
+	includedModels := s.includedSubscriptionModels(ctx, request, in.subscriptionStateHeaders)
 	rotationBudget, cancel := context.WithTimeout(ctx, subscriptionRotationBudget)
 	defer cancel()
 	ctx = context.WithValue(ctx, subscriptionRotationBudgetKey{}, rotationBudget)
 	hasFixedTarget := request.ForceModel != "" || callerModelPassthroughActive(ctx) ||
 		in.origin == policy.OverrideSourceDeployment || in.origin == policy.OverrideSourceRequest
 	readmitted := false
-	for len(activeModels) > 0 && rotationBudget.Err() == nil {
-		attemptCtx, attemptReq := s.subscriptionStateRequest(ctx, request, activeModels)
+	for len(includedModels) > 0 && rotationBudget.Err() == nil {
+		attemptCtx, attemptReq := s.subscriptionStateRequest(ctx, request, includedModels)
 		attemptCtx = context.WithValue(attemptCtx, subscriptionOnlyAttemptKey{}, true)
 		attemptReq.EnabledProviders = make(map[string]struct{})
 		excludedProviders := s.excludedProvidersForRequest(ctx)
@@ -162,7 +158,7 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 			var err error
 			target, err = s.Route(attemptCtx, attemptReq)
 			if err != nil {
-				if errors.Is(err, policy.ErrNoEligibleArm) || errors.Is(err, cluster.ErrAllowlistEmptiesPool) {
+				if errors.Is(err, policy.ErrNoEligibleArm) || errors.Is(err, cluster.ErrAllowlistEmptiesPool) || errors.Is(err, policy.ErrNoRoutableModels) {
 					if !readmitted && readmitSessionStrikes(ctx, &request) {
 						readmitted = true
 						continue
@@ -187,13 +183,13 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 		}
 		observability.FromContext(ctx).Info("Subscription model unavailable; selecting another included target", "model", target.Model, "provider", target.Provider)
 		recordTurnFailure(ctx, target.Model)
-		remainingModels := activeModels[:0]
-		for _, model := range activeModels {
+		remainingModels := includedModels[:0]
+		for _, model := range includedModels {
 			if model != target.Model {
 				remainingModels = append(remainingModels, model)
 			}
 		}
-		activeModels = remainingModels
+		includedModels = remainingModels
 		if hasFixedTarget {
 			break
 		}
@@ -236,6 +232,31 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 	}
 	observability.FromContext(ctx).Info("Included subscription targets unavailable; using exhausted model set", "model", target.Model, "provider", target.Provider)
 	return s.dispatchSubscriptionStateTarget(paidCtx, in, target, false)
+}
+
+// includedSubscriptionModels lists every model a live subscription can serve,
+// active-set models first. The active set is a preference, not a limit: a model
+// outside it may still rescue a failed active model on included capacity.
+func (s *Service) includedSubscriptionModels(ctx context.Context, req router.Request, headers http.Header) []string {
+	preferred := installationSubscriptionModelsWhenActiveFromContext(ctx)
+	candidates := append([]string{}, preferred...)
+	for _, entry := range catalog.Models {
+		if !slices.Contains(preferred, entry.ID) {
+			candidates = append(candidates, entry.ID)
+		}
+	}
+	models := make([]string, 0, len(candidates))
+	for _, model := range candidates {
+		if req.AllowedModels != nil && model != req.ForceModel {
+			if _, permitted := req.AllowedModels[model]; !permitted {
+				continue
+			}
+		}
+		if s.subscriptionStateModelAvailable(ctx, req, headers, model) {
+			models = append(models, model)
+		}
+	}
+	return models
 }
 
 func subscriptionRotationExpired(ctx, rotationBudget context.Context) bool {

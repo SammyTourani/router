@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -969,8 +970,10 @@ func allowedModelsForRequest(ctx context.Context) map[string]struct{} {
 	return out
 }
 
-// installationAllowedModelSet intersects subscription-state limits with the
-// installation's model policy. Neither state can widen the global allowlist.
+// installationAllowedModelSet intersects the attempt's selected subscription-state
+// set, when one is set, with the installation's model policy. Neither state can
+// widen the global allowlist, and neither narrows routing until an attempt
+// selects it.
 func installationAllowedModelSet(ctx context.Context) map[string]struct{} {
 	var allowed map[string]struct{}
 	if !planOwnedServingRequest(ctx) || subscriptionStateModelsEnabled(ctx) {
@@ -983,7 +986,7 @@ func installationAllowedModelSet(ctx context.Context) map[string]struct{} {
 	}
 	stateModels, hasSelectedStateModels := ctx.Value(subscriptionStateAllowedModelsKey{}).(map[string]struct{})
 	if !hasSelectedStateModels {
-		stateModels = modelSet(append(append([]string{}, installationSubscriptionModelsWhenActiveFromContext(ctx)...), installationSubscriptionModelsWhenInactiveFromContext(ctx)...))
+		return allowed
 	}
 	if allowed == nil {
 		if stateModels == nil {
@@ -1258,12 +1261,23 @@ func installationFastModeModelsFromContext(ctx context.Context) []string {
 	return out
 }
 
-// preferredModelsForRequest returns the installation's ordinary soft ranking.
+// preferredModelsForRequest returns the soft ranking: the subscription-active
+// set first while subscription-state routing applies, then the installation's
+// ordinary ranking (not used for plan-owned serving).
 func (s *Service) preferredModelsForRequest(ctx context.Context) []string {
-	if planOwnedServingRequest(ctx) {
-		return nil
+	var preferred []string
+	if subscriptionStateModelsEnabled(ctx) {
+		preferred = slices.Clone(installationSubscriptionModelsWhenActiveFromContext(ctx))
 	}
-	return installationPreferredModelsFromContext(ctx)
+	if planOwnedServingRequest(ctx) {
+		return preferred
+	}
+	for _, model := range installationPreferredModelsFromContext(ctx) {
+		if !slices.Contains(preferred, model) {
+			preferred = append(preferred, model)
+		}
+	}
+	return preferred
 }
 
 // clusterArmOverridesForRequest returns per-cluster arm overrides from ctx, or
