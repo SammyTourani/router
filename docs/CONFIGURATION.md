@@ -128,6 +128,13 @@ curl -sS -b jar -X POST https://<router>/admin/v1/provider-keys \
        "model_aliases":{"gpt-5":"openai-gpt-5"}}'
 ```
 
+A Cortex AI Gateway is configured the same way, with its endpoint
+(`https://<account-host>/api/v2/aigateways/<name>`) as the base URL. The router
+appends `/v1` like it does for the Cortex REST root. The gateway has no
+`/v1/responses` yet, so reasoning tool turns fall back to Chat Completions after
+the first probe, and native web search still runs on the account's
+`/api/v2/cortex/agent:run`.
+
 Both keys carry the same PAT; per model, the catalog's binding order decides
 which surface serves it, so Claude prefers the Anthropic one (it carries
 thinking blocks and `cache_control` natively) and falls back to the other. A
