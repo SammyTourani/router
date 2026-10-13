@@ -119,6 +119,37 @@ func TestSubscriptionRecoveryDoesNotExpandAdmissionSnapshot(t *testing.T) {
 	require.Zero(t, upstream.calls)
 }
 
+func TestSubscriptionLeaseOutsideSnapshotFallsThroughToAdmittedSeat(t *testing.T) {
+	upstream := &fakeClient{name: providers.ProviderAnthropic, outcomes: []fakeOutcome{{writeBytes: []byte("admitted answer")}}}
+	leaser := &scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "new-seat", AccessToken: "new-token"}, {AccountID: "initial-seat", AccessToken: "initial-token"}}}
+	svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderAnthropic: upstream}).WithManagedSubscriptions(leaser)
+	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "initial-seat", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive}})
+	rec := httptest.NewRecorder()
+	buf := newPreludeBuffer(rec)
+	in := plannedInputs(rec, buf, []catalog.ProviderBinding{{Provider: providers.ProviderAnthropic}}, nil)
+	in.initialDecision = router.Decision{Provider: providers.ProviderAnthropic, Model: catalog.ModelIDClaudeOpus48.String()}
+	_, err := svc.dispatchWithFallback(ctx, in)
+	require.NoError(t, err)
+	require.Equal(t, 1, upstream.calls)
+	require.Equal(t, "admitted answer", rec.Body.String())
+}
+
+func TestSubscriptionLeaseOutsideSnapshotBlocksPaidRecovery(t *testing.T) {
+	upstream := &fakeClient{name: providers.ProviderAnthropic, outcomes: []fakeOutcome{{writeBytes: []byte("unexpected paid answer")}}}
+	leaser := &scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "new-seat", AccessToken: "new-token"}}}
+	svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderAnthropic: upstream}).WithManagedSubscriptions(leaser).WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}})
+	resetAt := time.Now().Add(time.Hour)
+	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "spent-seat", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateExhausted, CooldownUntil: &resetAt}})
+	rec := httptest.NewRecorder()
+	buf := newPreludeBuffer(rec)
+	in := plannedInputs(rec, buf, []catalog.ProviderBinding{{Provider: providers.ProviderAnthropic}}, nil)
+	in.initialDecision = router.Decision{Provider: providers.ProviderAnthropic, Model: catalog.ModelIDClaudeOpus48.String()}
+	_, err := svc.dispatchWithFallback(ctx, in)
+	require.ErrorIs(t, err, ErrSubscriptionPoolUnavailable)
+	require.NotErrorIs(t, err, ErrSubscriptionPoolExhausted)
+	require.Zero(t, upstream.calls, "an unproven unadmitted seat must not authorize paid recovery")
+}
+
 func TestSubscriptionFundingLiveQuotaProofAllowsAPIWithoutObserver(t *testing.T) {
 	upstream := &fakeClient{name: providers.ProviderOpenAI, outcomes: []fakeOutcome{
 		{err: &providers.UpstreamErrorResponse{Status: http.StatusTooManyRequests, Body: []byte(`{"error":{"type":"usage_limit_reached"}}`)}},

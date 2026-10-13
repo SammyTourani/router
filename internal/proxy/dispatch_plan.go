@@ -329,6 +329,9 @@ func (s *Service) afterSubscriptionRotationBudget(ctx context.Context, decision 
 	if forcedClaudeClientAppRefused(ctx, decision, nil) {
 		return errors.Join(ErrSubscriptionClientAppRefused, rotationErr)
 	}
+	if errors.Is(rotationErr, ErrSubscriptionPoolUnavailable) {
+		return rotationErr
+	}
 	return errors.Join(ErrSubscriptionPoolExhausted, rotationErr)
 }
 

@@ -71,6 +71,9 @@ func TestExpiredRotationBudgetRendersCleanErrorWithoutAPI(t *testing.T) {
 	_, err := svc.dispatchWithFallback(ctx, in)
 
 	require.ErrorIs(t, err, ErrSubscriptionPoolUnavailable)
+	class, classified := ClassifyDispatchError(err)
+	require.True(t, classified)
+	require.Equal(t, http.StatusServiceUnavailable, class.Status, "a spent admission budget is not proof the pool is exhausted")
 	require.Zero(t, calls, "without an authorized paid key nothing is dispatched")
 	require.Equal(t, "terminal error", rec.Body.String())
 }

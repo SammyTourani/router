@@ -226,30 +226,37 @@ func (s *Service) leaseManagedSubscription(ctx context.Context, provider, model 
 	}
 	seen := make(map[string]bool)
 	var modelDenial error
+	// A seat leased outside the admission snapshot is skipped, but its unproven
+	// quota still forbids paid recovery and an exhausted verdict.
+	unadmitted := false
+	poolSpent := func() (context.Context, subscriptions.Lease, bool, error) {
+		if !unadmitted && !subscriptionAttemptOnly(ctx) && !paidFallbackForbidden(ctx) && s.managedProviderFallbackAvailable(ctx, poolProvider) && s.subscriptionAPIAuthorization(ctx, provider, model) == nil {
+			return ctx, subscriptions.Lease{}, false, nil
+		}
+		if unadmitted {
+			return ctx, subscriptions.Lease{}, true, ErrSubscriptionPoolUnavailable
+		}
+		if modelDenial != nil {
+			return ctx, subscriptions.Lease{}, true, modelDenial
+		}
+		return ctx, subscriptions.Lease{}, true, ErrSubscriptionPoolExhausted
+	}
 	for {
 		lease, present, err := s.managedSubscriptions.Lease(ctx, owner, poolProvider, ClientIdentityFrom(ctx).SessionID)
-		if err != nil || !present {
-			if !subscriptionAttemptOnly(ctx) && !paidFallbackForbidden(ctx) && s.managedProviderFallbackAvailable(ctx, poolProvider) && s.subscriptionAPIAuthorization(ctx, provider, model) == nil {
+		if err != nil && !errors.Is(err, subscriptions.ErrNoAvailableAccount) {
+			if !unadmitted && !subscriptionAttemptOnly(ctx) && !paidFallbackForbidden(ctx) && s.managedProviderFallbackAvailable(ctx, poolProvider) && s.subscriptionAPIAuthorization(ctx, provider, model) == nil {
 				return ctx, subscriptions.Lease{}, false, nil
 			}
-			if err != nil && !errors.Is(err, subscriptions.ErrNoAvailableAccount) {
-				return ctx, subscriptions.Lease{}, present, errors.Join(ErrSubscriptionPoolUnavailable, err)
-			}
-			if modelDenial != nil {
-				return ctx, subscriptions.Lease{}, true, modelDenial
-			}
-			return ctx, subscriptions.Lease{}, true, ErrSubscriptionPoolExhausted
+			return ctx, subscriptions.Lease{}, present, errors.Join(ErrSubscriptionPoolUnavailable, err)
+		}
+		if err != nil || !present {
+			return poolSpent()
 		}
 		if seen[lease.AccountID] {
 			lease.Release()
-			if !subscriptionAttemptOnly(ctx) && !paidFallbackForbidden(ctx) && s.managedProviderFallbackAvailable(ctx, poolProvider) && s.subscriptionAPIAuthorization(ctx, provider, model) == nil {
-				return ctx, subscriptions.Lease{}, false, nil
-			}
-			if modelDenial != nil {
-				return ctx, subscriptions.Lease{}, true, modelDenial
-			}
-			return ctx, subscriptions.Lease{}, true, ErrSubscriptionPoolExhausted
+			return poolSpent()
 		}
+		seen[lease.AccountID] = true
 		if candidates, snapshotPresent := ctx.Value(managedSubscriptionCandidatesKey{}).([]managedSubscriptionCandidate); snapshotPresent {
 			admitted := false
 			for _, candidate := range candidates {
@@ -261,10 +268,11 @@ func (s *Service) leaseManagedSubscription(ctx context.Context, provider, model 
 			if !admitted {
 				lease.Release()
 				observability.FromContext(ctx).Warn("Subscription lease is outside the request admission snapshot", "account_id", lease.AccountID, "provider", poolProvider)
-				return ctx, subscriptions.Lease{}, true, ErrSubscriptionPoolUnavailable
+				unadmitted = true
+				owner.ExcludedAccountIDs = append(owner.ExcludedAccountIDs, lease.AccountID)
+				continue
 			}
 		}
-		seen[lease.AccountID] = true
 		if winner, _ := ctx.Value(ManagedSubscriptionUsageContextKey{}).(*ManagedSubscriptionUsage); winner != nil {
 			if _, attempted := winner.AttemptedAccounts[lease.AccountID+"\x00"+model]; attempted {
 				lease.Release()
