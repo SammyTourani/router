@@ -129,6 +129,7 @@ func TestLeaseManagedSubscriptionSkipsObservedExhaustedAccount(t *testing.T) {
 	svc := newServiceWithProviders(t, nil).
 		WithManagedSubscriptions(leaser).
 		WithUsageObserver(observerWithSnapshot(exhaustedSubToken, exhaustedSnapshot()))
+	svc.now = func() time.Time { return time.Unix(1_000_000, 0) }
 
 	_, lease, managed, err := svc.leaseManagedSubscription(
 		managedSubscriptionTestContext(), providers.ProviderAnthropic, "claude-opus-4-8",

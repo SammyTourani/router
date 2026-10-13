@@ -74,12 +74,14 @@ func TestSubscriptionStateModelsFundingOrder(t *testing.T) {
 		name                                                                                                                                      string
 		claude, codex, emptyPaid, depleted, liveReject, committedFailure, forced, forcedPin, forceWithRequestSubset, demoteClaude, cooldownClaude bool
 		utilityTarget, passthroughTarget                                                                                                          bool
+		paidSetIncludesClaude                                                                                                                     bool
 		want                                                                                                                                      string
 		wantErr                                                                                                                                   bool
 	}{
 		{name: "Claude included before paid", claude: true, codex: true, want: stateClaudeModel},
 		{name: "Claude exhausted uses active Codex", codex: true, want: stateCodexModel},
 		{name: "both exhausted use cheap paid set", want: statePaidModel},
+		{name: "unavailable Claude skips funding-denied paid target", paidSetIncludesClaude: true, want: statePaidModel},
 		{name: "live Claude exhaustion rotates to Codex", claude: true, codex: true, liveReject: true, want: stateCodexModel},
 		{name: "live exhaustion uses cheap paid set", claude: true, liveReject: true, want: statePaidModel},
 		{name: "empty exhausted set refuses paid", emptyPaid: true, wantErr: true},
@@ -110,6 +112,9 @@ func TestSubscriptionStateModelsFundingOrder(t *testing.T) {
 			ctx := context.WithValue(managedSubscriptionTestContext(), ManagedSubscriptionProvidersContextKey{}, map[auth.SubscriptionProvider]struct{}{auth.SubscriptionProviderClaude: {}, auth.SubscriptionProviderCodex: {}})
 			ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenActiveContextKey{}, []string{stateClaudeModel, stateCodexModel})
 			paidModels := []string{statePaidModel}
+			if scenario.paidSetIncludesClaude {
+				paidModels = append(paidModels, stateClaudeModel)
+			}
 			if scenario.emptyPaid {
 				paidModels = nil
 			}

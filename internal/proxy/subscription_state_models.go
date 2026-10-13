@@ -215,6 +215,9 @@ func (s *Service) subscriptionStatePaidTargetAvailable(ctx context.Context, head
 	if servedOnSubscription(resolvedCredentials) || servedOnCodexSubscription(resolvedCredentials) {
 		return false
 	}
+	if s.subscriptionAPIAuthorization(s.withSubscriptionFundingAuthorization(ctx, headers), target.Provider, target.Model) != nil {
+		return false
+	}
 	return len(s.resolveBindingsForDispatch(resolvedCredentials, target)) > 0
 }
 

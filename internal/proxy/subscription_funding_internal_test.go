@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -201,4 +202,38 @@ func TestSubscriptionAdmissionBudgetChargesLeasingNotInference(t *testing.T) {
 		finish()
 		require.Zero(t, budget.remaining)
 	})
+}
+
+func TestSubscriptionFundingExpiredShortWindowCannotAuthorizeAPI(t *testing.T) {
+	for _, direct := range []bool{false, true} {
+		for _, refreshWeekly := range []bool{false, true} {
+			t.Run(fmt.Sprintf("direct=%t/refresh_weekly=%t", direct, refreshWeekly), func(t *testing.T) {
+				observedAt := time.Unix(1_800_000_000, 0)
+				now := observedAt
+				observer := usage.NewObserver([]byte("synthetic-salt"), time.Minute, func() time.Time { return now })
+				svc := newServiceWithProviders(t, nil).WithUsageObserver(observer)
+				svc.now = func() time.Time { return now }
+				ctx := context.Background()
+				credential, directToken := "subscription-account:seat", ""
+				if direct {
+					credential, directToken = "synthetic-direct-token", "synthetic-direct-token"
+				} else {
+					ctx = WithManagedSubscriptionCandidates(ctx, []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderCodex, State: auth.SubscriptionAccountStateActive}})
+				}
+				key := observer.Key([]byte(credential))
+				observer.Record(key, usage.Snapshot{Primary: usage.Window{UsedPercent: 1, WindowMinutes: 300}, Secondary: usage.Window{UsedPercent: 0.6, WindowMinutes: 10080}})
+				if refreshWeekly {
+					now = observedAt.Add(2 * time.Hour)
+					observer.Record(key, usage.Snapshot{Secondary: usage.Window{UsedPercent: 0.6, WindowMinutes: 10080}})
+				}
+				now = observedAt.Add(4 * time.Hour)
+				require.NoError(t, svc.authorizeSubscriptionAPI(ctx, subscriptions.ProviderCodex, directToken, ""))
+				now = observedAt.Add(6 * time.Hour)
+				_, cached := observer.Snapshot(key)
+				require.True(t, cached, "the weekly reading intentionally keeps this snapshot cached")
+				require.ErrorIs(t, svc.authorizeSubscriptionAPI(ctx, subscriptions.ProviderCodex, directToken, ""), ErrSubscriptionPoolUnavailable,
+					"a stale short-window cap is not current quota proof")
+			})
+		}
+	}
 }

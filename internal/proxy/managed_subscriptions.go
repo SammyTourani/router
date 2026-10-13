@@ -433,6 +433,7 @@ func (s *Service) subscriptionQuotaExhaustion(pool subscriptions.Provider, lease
 		} else {
 			snapshot, observed = usage.ParseCodexHeaders(upstream.Headers)
 		}
+		snapshot.ObservedAt = now
 		if observed && snapshot.ExhaustedAsOf(now) {
 			return linkedSubscriptionResetAt(snapshot, now), true
 		}
@@ -617,7 +618,11 @@ func linkedSubscriptionResetAt(snapshot usage.Snapshot, now time.Time) time.Time
 		}
 		candidate := window.ResetAt
 		if candidate.IsZero() && window.WindowMinutes > 0 {
-			candidate = snapshot.ObservedAt.Add(time.Duration(window.WindowMinutes) * time.Minute)
+			observedAt := window.ObservedAt
+			if observedAt.IsZero() {
+				observedAt = snapshot.ObservedAt
+			}
+			candidate = observedAt.Add(time.Duration(window.WindowMinutes) * time.Minute)
 		}
 		if candidate.After(resetAt) {
 			resetAt = candidate
