@@ -52,7 +52,7 @@ func recordTurnFailure(ctx context.Context, model string) {
 func (s *Service) strikeRescuedModelsForTurn(ctx context.Context, proxyErr error, served router.Decision, hardPinned bool, sessionKey [sessionpin.SessionKeyLen]byte, role, pinRole string) {
 	failures := turnFailuresFromContext(ctx)
 	store, ok := s.pinStore.(sessionpin.TurnStrikeStore)
-	if failures == nil || !ok || proxyErr != nil || hardPinned || sessionKey == ([sessionpin.SessionKeyLen]byte{}) ||
+	if !ok || proxyErr != nil || hardPinned || sessionKey == ([sessionpin.SessionKeyLen]byte{}) ||
 		strings.HasPrefix(served.Reason, translate.ReasonUserForceModel) {
 		return
 	}
