@@ -97,7 +97,7 @@ func (s *Service) authorizeSubscriptionAPI(ctx context.Context, pool subscriptio
 	candidates, snapshotPresent := ctx.Value(managedSubscriptionCandidatesKey{}).([]managedSubscriptionCandidate)
 	for _, candidate := range candidates {
 		// A seat that can never be leased can never prove exhaustion either.
-		if candidate.provider != auth.SubscriptionProvider(pool) || !candidate.leasable() {
+		if candidate.provider != auth.SubscriptionProvider(pool) || !candidate.enabled || candidate.state == auth.SubscriptionAccountStateDisabled || candidate.state == auth.SubscriptionAccountStateReconnectRequired {
 			continue
 		}
 		if s.managedAccountQuotaExhausted(ctx, candidate, now) {
@@ -127,10 +127,6 @@ func (s *Service) authorizeSubscriptionAPI(ctx context.Context, pool subscriptio
 		return fmt.Errorf("%w: caller subscription quota is available or unknown", ErrSubscriptionPoolUnavailable)
 	}
 	return nil
-}
-
-func (c managedSubscriptionCandidate) leasable() bool {
-	return c.enabled && c.state != auth.SubscriptionAccountStateDisabled && c.state != auth.SubscriptionAccountStateReconnectRequired
 }
 
 func (s *Service) managedAccountQuotaExhausted(ctx context.Context, candidate managedSubscriptionCandidate, now time.Time) bool {
