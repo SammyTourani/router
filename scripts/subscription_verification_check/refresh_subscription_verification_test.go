@@ -234,7 +234,7 @@ func verifyDispatchBilling(t *testing.T, pool *pgxpool.Pool, authService *auth.S
 		rec := httptest.NewRecorder()
 		dispatchErr := svc.ProxyOpenAIChatCompletion(requestCtx, []byte(body), rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body)))
 		if scenario.genericThrottle {
-			require.ErrorIs(t, dispatchErr, proxy.ErrSubscriptionPoolUnavailable)
+			require.ErrorIs(t, dispatchErr, proxy.ErrSubscriptionPoolExhausted)
 			require.NotContains(t, rec.Body.String(), "billing answer")
 		} else {
 			require.NoError(t, dispatchErr)
