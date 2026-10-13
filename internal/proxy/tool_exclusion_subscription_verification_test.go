@@ -68,7 +68,7 @@ func TestVerificationRealResolverWeakToolExclusionPreventsHTTP(t *testing.T) {
 	body := `{"model":"auto","stream":true,"messages":[{"role":"user","content":"synthetic tools"}],"tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}}]}`
 	rec := httptest.NewRecorder()
 	dispatchErr := svc.ProxyOpenAIChatCompletion(ctx, []byte(body), rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body)))
-	require.ErrorIs(t, dispatchErr, ErrSubscriptionPoolUnavailable)
+	require.ErrorIs(t, dispatchErr, ErrSubscriptionPoolExhausted)
 	var upstreamErr *providers.UpstreamErrorResponse
 	require.ErrorAs(t, dispatchErr, &upstreamErr)
 	require.Equal(t, http.StatusNotFound, upstreamErr.Status)

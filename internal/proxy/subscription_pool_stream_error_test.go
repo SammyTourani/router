@@ -48,7 +48,7 @@ func TestProxyMessages_ManagedPoolStreamingFailureLeavesRenderingToHandler(t *te
 
 	err := svc.ProxyMessages(ctx, body, rec, req)
 
-	require.ErrorIs(t, err, ErrSubscriptionPoolUnavailable,
+	require.ErrorIs(t, err, ErrSubscriptionPoolExhausted,
 		"the pool sentinel must survive for the handler to classify and log")
 	var upstreamErr *providers.UpstreamErrorResponse
 	require.ErrorAs(t, err, &upstreamErr)
@@ -89,7 +89,7 @@ func TestProxyMessages_ManagedPoolFailureBeforeAnyBytesLeavesRenderingToHandler(
 
 	err := svc.ProxyMessages(ctx, body, rec, req)
 
-	require.ErrorIs(t, err, ErrSubscriptionPoolUnavailable)
+	require.ErrorIs(t, err, ErrSubscriptionPoolExhausted)
 	var upstreamErr *providers.UpstreamErrorResponse
 	require.ErrorAs(t, err, &upstreamErr)
 	require.Equal(t, http.StatusTooManyRequests, upstreamErr.Status)

@@ -149,7 +149,7 @@ func TestSlowFailedAttemptsRemainBoundedByDistinctSeats(t *testing.T) {
 
 		_, err := svc.dispatchWithFallback(ctx, in)
 
-		require.ErrorIs(t, err, ErrSubscriptionPoolUnavailable)
+		require.ErrorIs(t, err, ErrSubscriptionPoolExhausted)
 		require.Equal(t, 2, calls)
 		require.Equal(t, 2, leaser.next, "each account is admitted once despite slow inference")
 	})

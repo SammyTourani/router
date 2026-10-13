@@ -30,16 +30,25 @@ func TestSubscriptionFundingPaidDispatchRequiresQuotaProof(t *testing.T) {
 		accounts []*auth.SubscriptionAccount
 		allowed  bool
 	}{
-		{name: "no compatible pool", accounts: []*auth.SubscriptionAccount{{ID: "codex", Provider: auth.SubscriptionProviderCodex, State: auth.SubscriptionAccountStateActive}}, allowed: true},
-		{name: "unknown quota", accounts: []*auth.SubscriptionAccount{{ID: "claude", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateUnknown}}},
-		{name: "active quota", accounts: []*auth.SubscriptionAccount{{ID: "claude", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateActive}}},
-		{name: "cooldown is not exhaustion", accounts: []*auth.SubscriptionAccount{{ID: "claude", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateCooldown, CooldownUntil: &resetAt}}},
-		{name: "reconnect is not exhaustion", accounts: []*auth.SubscriptionAccount{{ID: "claude", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateReconnectRequired}}},
-		{name: "all quota exhausted", accounts: []*auth.SubscriptionAccount{{ID: "claude", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateExhausted, CooldownUntil: &resetAt}}, allowed: true},
-		{name: "reset restores included lane", accounts: []*auth.SubscriptionAccount{{ID: "claude", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateExhausted, CooldownUntil: &now}}},
+		{name: "no compatible pool", accounts: []*auth.SubscriptionAccount{{ID: "codex", Provider: auth.SubscriptionProviderCodex, Enabled: true, State: auth.SubscriptionAccountStateActive}}, allowed: true},
+		{name: "unknown quota", accounts: []*auth.SubscriptionAccount{{ID: "claude", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateUnknown}}},
+		{name: "active quota", accounts: []*auth.SubscriptionAccount{{ID: "claude", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive}}},
+		{name: "cooldown is not exhaustion", accounts: []*auth.SubscriptionAccount{{ID: "claude", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateCooldown, CooldownUntil: &resetAt}}},
+		{name: "reconnect-required seat cannot block API", accounts: []*auth.SubscriptionAccount{{ID: "claude", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateReconnectRequired}}, allowed: true},
+		{name: "disabled seat cannot block API", accounts: []*auth.SubscriptionAccount{{ID: "claude", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateDisabled}}, allowed: true},
+		{name: "dead seat beside exhausted seat", accounts: []*auth.SubscriptionAccount{
+			{ID: "spent", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateExhausted, CooldownUntil: &resetAt},
+			{ID: "dead", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateReconnectRequired},
+		}, allowed: true},
+		{name: "dead seat beside active seat", accounts: []*auth.SubscriptionAccount{
+			{ID: "usable", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive},
+			{ID: "dead", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateDisabled},
+		}},
+		{name: "all quota exhausted", accounts: []*auth.SubscriptionAccount{{ID: "claude", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateExhausted, CooldownUntil: &resetAt}}, allowed: true},
+		{name: "reset restores included lane", accounts: []*auth.SubscriptionAccount{{ID: "claude", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateExhausted, CooldownUntil: &now}}},
 		{name: "one exhausted one active", accounts: []*auth.SubscriptionAccount{
-			{ID: "spent", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateExhausted, CooldownUntil: &resetAt},
-			{ID: "usable", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateActive},
+			{ID: "spent", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateExhausted, CooldownUntil: &resetAt},
+			{ID: "usable", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive},
 		}},
 	} {
 		for _, source := range []string{"", requestcontext.SourceBYOK, requestcontext.SourceClient} {
@@ -74,7 +83,7 @@ func TestSubscriptionFundingPaidDispatchRequiresQuotaProof(t *testing.T) {
 func TestSubscriptionFundingFinalOAuthLeaseIsAllowed(t *testing.T) {
 	upstream := &fakeClient{name: providers.ProviderAnthropic, outcomes: []fakeOutcome{{writeBytes: []byte("included answer")}}}
 	svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderAnthropic: upstream}).WithManagedSubscriptions(&scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "seat", AccessToken: "oauth-token"}}})
-	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateActive}})
+	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive}})
 	rec := httptest.NewRecorder()
 	buf := newPreludeBuffer(rec)
 	in := plannedInputs(rec, buf, []catalog.ProviderBinding{{Provider: providers.ProviderAnthropic}}, nil)
@@ -92,7 +101,7 @@ func TestSubscriptionFundingUnknownEnrollmentAndGatewayBinding(t *testing.T) {
 	_, known := catalog.ByID(catalog.ModelIDGemini31ProPreview.String())
 	require.True(t, known)
 	require.NoError(t, svc.subscriptionAPIAuthorization(unknownCtx, providers.ProviderGoogle, catalog.ModelIDGemini31ProPreview.String()))
-	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateActive}})
+	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive}})
 	require.ErrorIs(t, svc.subscriptionAPIAuthorization(ctx, providers.ProviderAnthropicGateway, catalog.ModelIDClaudeOpus48.String()), ErrSubscriptionPoolUnavailable,
 		"a gateway binding must not bypass catalog-compatible pool authorization")
 }
@@ -100,7 +109,7 @@ func TestSubscriptionFundingUnknownEnrollmentAndGatewayBinding(t *testing.T) {
 func TestSubscriptionRecoveryDoesNotExpandAdmissionSnapshot(t *testing.T) {
 	upstream := &fakeClient{name: providers.ProviderAnthropic, outcomes: []fakeOutcome{{writeBytes: []byte("unadmitted answer")}}}
 	svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderAnthropic: upstream}).WithManagedSubscriptions(&scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "new-seat", AccessToken: "new-token"}}})
-	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "initial-seat", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateActive}})
+	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "initial-seat", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive}})
 	rec := httptest.NewRecorder()
 	buf := newPreludeBuffer(rec)
 	in := plannedInputs(rec, buf, []catalog.ProviderBinding{{Provider: providers.ProviderAnthropic}}, nil)
@@ -117,7 +126,7 @@ func TestSubscriptionFundingLiveQuotaProofAllowsAPIWithoutObserver(t *testing.T)
 	}}
 	leaser := &healthSubscriptionLeaser{scriptedSubscriptionLeaser: &scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "seat", AccessToken: "oauth-token"}}}}
 	svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderOpenAI: upstream}).WithManagedSubscriptions(leaser).WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderOpenAI: {}})
-	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderCodex, State: auth.SubscriptionAccountStateActive}})
+	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderCodex, Enabled: true, State: auth.SubscriptionAccountStateActive}})
 	rec := httptest.NewRecorder()
 	buf := newPreludeBuffer(rec)
 	in := plannedInputs(rec, buf, []catalog.ProviderBinding{{Provider: providers.ProviderOpenAI}}, nil)
@@ -140,7 +149,7 @@ func TestSubscriptionFundingOperationalFailuresNeverAuthorizeAPI(t *testing.T) {
 			upstream := &fakeClient{name: providers.ProviderAnthropic, outcomes: []fakeOutcome{{err: failure}, {writeBytes: []byte("unexpected paid answer")}}}
 			leaser := &scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "seat", AccessToken: "oauth-token"}}}
 			svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderAnthropic: upstream}).WithManagedSubscriptions(leaser).WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}})
-			ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateActive}})
+			ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive}})
 			rec := httptest.NewRecorder()
 			buf := newPreludeBuffer(rec)
 			in := plannedInputs(rec, buf, []catalog.ProviderBinding{{Provider: providers.ProviderAnthropic}}, nil)
@@ -157,7 +166,7 @@ func TestSubscriptionFundingOperationalFailuresNeverAuthorizeAPI(t *testing.T) {
 func TestSubscriptionFundingBufferedAuxiliaryCannotClearGuard(t *testing.T) {
 	upstream := &fakeClient{name: providers.ProviderAnthropic, outcomes: []fakeOutcome{{writeBytes: []byte("unexpected summary")}}}
 	svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderAnthropic: upstream})
-	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateActive}})
+	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive}})
 	ctx = clearCredentials(svc.withSubscriptionFundingAuthorization(ctx, nil))
 	summarizer := newTestSummarizer(t, upstream, policy.HandoverSummaryDefaultModel, time.Second)
 	plan, err := summarizer.plans.Resolve(policy.ResolutionRequest{Purpose: inference.PurposeHandoverSummary, RouterRequest: router.Request{EnabledProviders: map[string]struct{}{providers.ProviderAnthropic: {}}}})
@@ -172,7 +181,7 @@ func TestSubscriptionFundingBufferedAuxiliaryCannotClearGuard(t *testing.T) {
 
 func TestSubscriptionFundingObservedQuotaAndAdmissionSnapshotAreDetached(t *testing.T) {
 	resetAt := time.Now().Add(time.Hour)
-	account := &auth.SubscriptionAccount{ID: "seat", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateActive, CooldownUntil: &resetAt}
+	account := &auth.SubscriptionAccount{ID: "seat", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive, CooldownUntil: &resetAt}
 	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{account})
 	account.State = auth.SubscriptionAccountStateExhausted
 	svc := newServiceWithProviders(t, nil)
@@ -218,7 +227,7 @@ func TestSubscriptionFundingExpiredShortWindowCannotAuthorizeAPI(t *testing.T) {
 				if direct {
 					credential, directToken = "synthetic-direct-token", "synthetic-direct-token"
 				} else {
-					ctx = WithManagedSubscriptionCandidates(ctx, []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderCodex, State: auth.SubscriptionAccountStateActive}})
+					ctx = WithManagedSubscriptionCandidates(ctx, []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderCodex, Enabled: true, State: auth.SubscriptionAccountStateActive}})
 				}
 				key := observer.Key([]byte(credential))
 				observer.Record(key, usage.Snapshot{Primary: usage.Window{UsedPercent: 1, WindowMinutes: 300}, Secondary: usage.Window{UsedPercent: 0.6, WindowMinutes: 10080}})

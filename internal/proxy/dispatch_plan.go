@@ -329,7 +329,7 @@ func (s *Service) afterSubscriptionRotationBudget(ctx context.Context, decision 
 	if forcedClaudeClientAppRefused(ctx, decision, nil) {
 		return errors.Join(ErrSubscriptionClientAppRefused, rotationErr)
 	}
-	return errors.Join(ErrSubscriptionPoolUnavailable, rotationErr)
+	return errors.Join(ErrSubscriptionPoolExhausted, rotationErr)
 }
 
 func recordWinningCredentials(ctx, credentialCtx context.Context) {

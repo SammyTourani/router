@@ -238,7 +238,7 @@ func (s *Service) leaseManagedSubscription(ctx context.Context, provider, model 
 			if modelDenial != nil {
 				return ctx, subscriptions.Lease{}, true, modelDenial
 			}
-			return ctx, subscriptions.Lease{}, true, ErrSubscriptionPoolUnavailable
+			return ctx, subscriptions.Lease{}, true, ErrSubscriptionPoolExhausted
 		}
 		if seen[lease.AccountID] {
 			lease.Release()
@@ -248,7 +248,7 @@ func (s *Service) leaseManagedSubscription(ctx context.Context, provider, model 
 			if modelDenial != nil {
 				return ctx, subscriptions.Lease{}, true, modelDenial
 			}
-			return ctx, subscriptions.Lease{}, true, ErrSubscriptionPoolUnavailable
+			return ctx, subscriptions.Lease{}, true, ErrSubscriptionPoolExhausted
 		}
 		if candidates, snapshotPresent := ctx.Value(managedSubscriptionCandidatesKey{}).([]managedSubscriptionCandidate); snapshotPresent {
 			admitted := false

@@ -61,7 +61,7 @@ func TestProxyOpenAIChatCompletion_ManagedPoolFailureIsRenderedOnce(t *testing.T
 
 	err := svc.ProxyOpenAIChatCompletion(ctx, body, rec, req)
 
-	require.ErrorIs(t, err, ErrSubscriptionPoolUnavailable,
+	require.ErrorIs(t, err, ErrSubscriptionPoolExhausted,
 		"the pool sentinel must survive for the handler to classify")
 	assert.Equal(t, 1, strings.Count(rec.Body.String(), "rate_limit_error"),
 		"the client sees the pool failure exactly once")

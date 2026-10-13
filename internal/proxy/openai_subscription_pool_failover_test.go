@@ -95,7 +95,7 @@ func TestProxyOpenAIChatCompletion_SubscriptionOnlyKeepsPoolUnavailability(t *te
 
 	err := svc.ProxyOpenAIChatCompletion(ctx, body, rec, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(string(body))))
 
-	require.ErrorIs(t, err, ErrSubscriptionPoolUnavailable)
+	require.ErrorIs(t, err, ErrSubscriptionPoolExhausted)
 	assert.Empty(t, rescue.endpoints, "subscription-only must not spend a paid sibling")
 }
 
