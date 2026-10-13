@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ type stateModelRouter struct{}
 func (stateModelRouter) Route(_ context.Context, req router.Request) (router.Decision, error) {
 	resolver := policy.NewResolver(modelSet([]string{stateClaudeModel, stateCodexModel, statePaidModel}), nil, func(model catalog.Model) string { return model.ID }, policy.ProviderPolicy{})
 	eligible := modelSet(resolver.Resolve(req).CandidateModels())
-	for _, model := range []string{stateClaudeModel, stateCodexModel, statePaidModel} {
+	for _, model := range append(slices.Clone(req.PreferredModels), stateClaudeModel, stateCodexModel, statePaidModel) {
 		if _, admitted := eligible[model]; admitted {
 			entry, _ := catalog.ByID(model)
 			for _, binding := range entry.Providers {
@@ -218,9 +219,11 @@ func TestSubscriptionStateModelsHTTPIngress(t *testing.T) {
 		for _, scenario := range []struct {
 			name          string
 			claude, codex bool
+			active        []string
 			want          string
 		}{
 			{name: "Claude", claude: true, codex: true, want: stateClaudeModel},
+			{name: "active preference wins first included attempt", claude: true, codex: true, active: []string{stateCodexModel}, want: stateCodexModel},
 			{name: "Codex after Claude exhaustion", codex: true, want: stateCodexModel},
 			{name: "cheap after both exhausted", want: statePaidModel},
 		} {
@@ -255,7 +258,11 @@ func TestSubscriptionStateModelsHTTPIngress(t *testing.T) {
 					WithManagedSubscriptions(&stateModelLeaser{activeProviders: map[subscriptions.Provider]bool{subscriptions.ProviderClaude: scenario.claude, subscriptions.ProviderCodex: scenario.codex}}).
 					WithDeploymentKeyedProviders(modelSet([]string{providers.ProviderAnthropic, providers.ProviderOpenAI, providers.ProviderOpenRouter}))
 				ctx := context.WithValue(managedSubscriptionTestContext(), ManagedSubscriptionProvidersContextKey{}, map[auth.SubscriptionProvider]struct{}{auth.SubscriptionProviderClaude: {}, auth.SubscriptionProviderCodex: {}})
-				ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenActiveContextKey{}, []string{stateClaudeModel, stateCodexModel})
+				activeModels := scenario.active
+				if activeModels == nil {
+					activeModels = []string{stateClaudeModel, stateCodexModel}
+				}
+				ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenActiveContextKey{}, activeModels)
 				ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenInactiveContextKey{}, []string{statePaidModel})
 				body := `{"model":"auto","stream":true,"max_tokens":100,"messages":[{"role":"user","content":"synthetic task"}]}`
 				if surface == routePathResponses {

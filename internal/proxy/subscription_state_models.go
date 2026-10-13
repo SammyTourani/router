@@ -109,7 +109,6 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 	in.subscriptionStateRequest = nil
 	in.alternatives = nil
 	includedModels := s.includedSubscriptionModels(ctx, request, in.subscriptionStateHeaders)
-	request.PreferredModels = append(append([]string{}, installationSubscriptionModelsWhenActiveFromContext(ctx)...), request.PreferredModels...)
 	rotationBudget, cancel := context.WithTimeout(ctx, subscriptionRotationBudget)
 	defer cancel()
 	ctx = context.WithValue(ctx, subscriptionRotationBudgetKey{}, rotationBudget)

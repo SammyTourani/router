@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1260,12 +1261,23 @@ func installationFastModeModelsFromContext(ctx context.Context) []string {
 	return out
 }
 
-// preferredModelsForRequest returns the installation's ordinary soft ranking.
+// preferredModelsForRequest returns the soft ranking: the subscription-active
+// set first while subscription-state routing applies, then the installation's
+// ordinary ranking (not used for plan-owned serving).
 func (s *Service) preferredModelsForRequest(ctx context.Context) []string {
-	if planOwnedServingRequest(ctx) {
-		return nil
+	var preferred []string
+	if subscriptionStateModelsEnabled(ctx) {
+		preferred = slices.Clone(installationSubscriptionModelsWhenActiveFromContext(ctx))
 	}
-	return installationPreferredModelsFromContext(ctx)
+	if planOwnedServingRequest(ctx) {
+		return preferred
+	}
+	for _, model := range installationPreferredModelsFromContext(ctx) {
+		if !slices.Contains(preferred, model) {
+			preferred = append(preferred, model)
+		}
+	}
+	return preferred
 }
 
 // clusterArmOverridesForRequest returns per-cluster arm overrides from ctx, or
