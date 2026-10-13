@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 
 	"weave-os/router/internal/billing"
 	"weave-os/router/internal/observability"
@@ -107,12 +108,8 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 	}
 	in.subscriptionStateRequest = nil
 	in.alternatives = nil
-	activeModels := make([]string, 0)
-	for _, model := range installationSubscriptionModelsWhenActiveFromContext(ctx) {
-		if s.subscriptionStateModelAvailable(ctx, request, in.subscriptionStateHeaders, model) {
-			activeModels = append(activeModels, model)
-		}
-	}
+	activeModels := s.includedSubscriptionModels(ctx, request, in.subscriptionStateHeaders)
+	request.PreferredModels = append(append([]string{}, installationSubscriptionModelsWhenActiveFromContext(ctx)...), request.PreferredModels...)
 	rotationBudget, cancel := context.WithTimeout(ctx, subscriptionRotationBudget)
 	defer cancel()
 	ctx = context.WithValue(ctx, subscriptionRotationBudgetKey{}, rotationBudget)
@@ -144,7 +141,7 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 			var err error
 			target, err = s.Route(attemptCtx, attemptReq)
 			if err != nil {
-				if errors.Is(err, policy.ErrNoEligibleArm) || errors.Is(err, cluster.ErrAllowlistEmptiesPool) {
+				if errors.Is(err, policy.ErrNoEligibleArm) || errors.Is(err, cluster.ErrAllowlistEmptiesPool) || errors.Is(err, policy.ErrNoRoutableModels) {
 					break
 				}
 				return -1, err
@@ -213,6 +210,31 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 	}
 	observability.FromContext(ctx).Info("Included subscription targets unavailable; using exhausted model set", "model", target.Model, "provider", target.Provider)
 	return s.dispatchSubscriptionStateTarget(paidCtx, in, target, false)
+}
+
+// includedSubscriptionModels lists every model a live subscription can serve,
+// active-set models first. The active set is a preference, not a limit: a model
+// outside it may still rescue a failed active model on included capacity.
+func (s *Service) includedSubscriptionModels(ctx context.Context, req router.Request, headers http.Header) []string {
+	preferred := installationSubscriptionModelsWhenActiveFromContext(ctx)
+	candidates := append([]string{}, preferred...)
+	for _, entry := range catalog.Models {
+		if entry.ID != "" && !slices.Contains(preferred, entry.ID) {
+			candidates = append(candidates, entry.ID)
+		}
+	}
+	models := make([]string, 0, len(candidates))
+	for _, model := range candidates {
+		if req.AllowedModels != nil && model != req.ForceModel {
+			if _, permitted := req.AllowedModels[model]; !permitted {
+				continue
+			}
+		}
+		if s.subscriptionStateModelAvailable(ctx, req, headers, model) {
+			models = append(models, model)
+		}
+	}
+	return models
 }
 
 func subscriptionRotationExpired(ctx, rotationBudget context.Context) bool {

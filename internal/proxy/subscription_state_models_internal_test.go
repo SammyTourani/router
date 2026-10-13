@@ -71,11 +71,11 @@ func (l *stateModelLeaser) Lease(_ context.Context, owner auth.SubscriptionOwner
 
 func TestSubscriptionStateModelsFundingOrder(t *testing.T) {
 	for _, scenario := range []struct {
-		name                                                                                                                                      string
-		claude, codex, emptyPaid, depleted, liveReject, committedFailure, forced, forcedPin, forceWithRequestSubset, demoteClaude, cooldownClaude bool
-		utilityTarget, passthroughTarget                                                                                                          bool
-		want                                                                                                                                      string
-		wantErr                                                                                                                                   bool
+		name                                                                                                                                                        string
+		claude, codex, emptyPaid, depleted, liveReject, committedFailure, forced, forcedPin, forceWithRequestSubset, demoteClaude, cooldownClaude, claudeOnlyActive bool
+		utilityTarget, passthroughTarget                                                                                                                            bool
+		want                                                                                                                                                        string
+		wantErr                                                                                                                                                     bool
 	}{
 		{name: "Claude included before paid", claude: true, codex: true, want: stateClaudeModel},
 		{name: "Claude exhausted uses active Codex", codex: true, want: stateCodexModel},
@@ -93,6 +93,7 @@ func TestSubscriptionStateModelsFundingOrder(t *testing.T) {
 		{name: "session-cooling Claude selects healthy Codex", claude: true, codex: true, cooldownClaude: true, want: stateCodexModel},
 		{name: "depleted credits still serve Codex", codex: true, depleted: true, want: stateCodexModel},
 		{name: "depleted credits prohibit cheap paid fallback", depleted: true, wantErr: true},
+		{name: "included model outside active set rescues failed active model", claude: true, codex: true, liveReject: true, claudeOnlyActive: true, want: stateCodexModel},
 		{name: "committed subscription failure never replays", claude: true, committedFailure: true, wantErr: true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -108,7 +109,11 @@ func TestSubscriptionStateModelsFundingOrder(t *testing.T) {
 			svc := NewService(stateModelRouter{}, map[string]providers.Client{providers.ProviderAnthropic: claude, providers.ProviderOpenAI: codex, providers.ProviderOpenRouter: paid}, nil, false, nil, nil, false, "", "", nil).
 				WithManagedSubscriptions(&stateModelLeaser{activeProviders: map[subscriptions.Provider]bool{subscriptions.ProviderClaude: scenario.claude, subscriptions.ProviderCodex: scenario.codex}})
 			ctx := context.WithValue(managedSubscriptionTestContext(), ManagedSubscriptionProvidersContextKey{}, map[auth.SubscriptionProvider]struct{}{auth.SubscriptionProviderClaude: {}, auth.SubscriptionProviderCodex: {}})
-			ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenActiveContextKey{}, []string{stateClaudeModel, stateCodexModel})
+			activeModels := []string{stateClaudeModel, stateCodexModel}
+			if scenario.claudeOnlyActive {
+				activeModels = []string{stateClaudeModel}
+			}
+			ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenActiveContextKey{}, activeModels)
 			paidModels := []string{statePaidModel}
 			if scenario.emptyPaid {
 				paidModels = nil

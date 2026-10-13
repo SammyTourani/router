@@ -969,8 +969,10 @@ func allowedModelsForRequest(ctx context.Context) map[string]struct{} {
 	return out
 }
 
-// installationAllowedModelSet intersects subscription-state limits with the
-// installation's model policy. Neither state can widen the global allowlist.
+// installationAllowedModelSet intersects the attempt's selected subscription-state
+// set, when one is set, with the installation's model policy. Neither state can
+// widen the global allowlist, and neither narrows routing until an attempt
+// selects it.
 func installationAllowedModelSet(ctx context.Context) map[string]struct{} {
 	var allowed map[string]struct{}
 	if !planOwnedServingRequest(ctx) || subscriptionStateModelsEnabled(ctx) {
@@ -983,7 +985,7 @@ func installationAllowedModelSet(ctx context.Context) map[string]struct{} {
 	}
 	stateModels, hasSelectedStateModels := ctx.Value(subscriptionStateAllowedModelsKey{}).(map[string]struct{})
 	if !hasSelectedStateModels {
-		stateModels = modelSet(append(append([]string{}, installationSubscriptionModelsWhenActiveFromContext(ctx)...), installationSubscriptionModelsWhenInactiveFromContext(ctx)...))
+		return allowed
 	}
 	if allowed == nil {
 		if stateModels == nil {
