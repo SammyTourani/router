@@ -525,6 +525,10 @@ type InstallationExcludedModelsContextKey struct{}
 // means no restriction.
 type InstallationAllowedModelsContextKey struct{}
 
+// InstallationSubscriptionStateModelsEnabledContextKey carries true when the
+// installation has subscription-state model sets turned on, even if both are empty.
+type InstallationSubscriptionStateModelsEnabledContextKey struct{}
+
 // InstallationSubscriptionModelsWhenActiveContextKey carries the
 // installation's model set for included Claude and Codex serving.
 type InstallationSubscriptionModelsWhenActiveContextKey struct{}

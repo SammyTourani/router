@@ -24,7 +24,9 @@ and preserve the selected quality tier, tool/context exclusions and provider
 allowlist. Explicit models stay fixed. Boost follows stable source ordering; Max
 retains its existing subscription exclusion. After eligible included capacity is
 positively quota-exhausted, authorized API capacity serves the originally selected model unless
-subscription-aware model sets are configured. With those sets enabled, the
+subscription-aware model sets are configured. Each set is stored as the
+models unchecked for that state, so a newly deployed model joins both sets
+until someone excludes it. With those sets enabled, the
 active set is a preference for included Claude/Codex targets and the exhausted
 set limits paid fallback. Any request-compatible model a live subscription can
 serve stays eligible on included capacity, so a failed active-set model is
