@@ -25,7 +25,8 @@ func WithAuthorization(ctx context.Context, authorize Authorization) context.Con
 	return context.WithValue(ctx, authorizationContextKey{}, authorize)
 }
 
-// AuthorizationFromContext returns the admitted request's funding check.
+// AuthorizationFromContext returns the funding check, or nil for an unguarded
+// context. Run skips funding authorization when no check is present.
 func AuthorizationFromContext(ctx context.Context) Authorization {
 	authorize, _ := ctx.Value(authorizationContextKey{}).(Authorization)
 	return authorize

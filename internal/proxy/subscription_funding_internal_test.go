@@ -88,7 +88,9 @@ func TestSubscriptionFundingUnknownEnrollmentAndGatewayBinding(t *testing.T) {
 	unknownCtx := context.WithValue(context.Background(), ManagedSubscriptionEnrollmentUnavailableContextKey{}, true)
 	require.ErrorIs(t, svc.subscriptionAPIAuthorization(unknownCtx, providers.ProviderAnthropic, catalog.ModelIDClaudeOpus48.String()), ErrSubscriptionPoolUnavailable)
 	// Gemini has no compatible subscription pool; unrelated uncertainty cannot block it.
-	require.NoError(t, svc.subscriptionAPIAuthorization(unknownCtx, providers.ProviderGoogle, catalog.ModelIDGemini31Pro.String()))
+	_, known := catalog.ByID(catalog.ModelIDGemini31ProPreview.String())
+	require.True(t, known)
+	require.NoError(t, svc.subscriptionAPIAuthorization(unknownCtx, providers.ProviderGoogle, catalog.ModelIDGemini31ProPreview.String()))
 	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderClaude, State: auth.SubscriptionAccountStateActive}})
 	require.ErrorIs(t, svc.subscriptionAPIAuthorization(ctx, providers.ProviderAnthropicGateway, catalog.ModelIDClaudeOpus48.String()), ErrSubscriptionPoolUnavailable,
 		"a gateway binding must not bypass catalog-compatible pool authorization")
