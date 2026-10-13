@@ -85,6 +85,16 @@ re-anchors, post-command continuations, band swap, sibling failover, the policy
  deadline default, and loop escalation — every path where the router
 picked the model. `forcedPinEligible` deliberately does not.
 
+**A rescued model stays out for the rest of the agent turn.** With
+`rescued_failure_arm_demotion` off, `maybeStrikeArmAfterRescuedFailure` and the
+subscription-state included lane record the failed model in the request's
+`turnFailures`; once another model serves, `strikeRescuedModelsForTurn` writes
+it to `Pin.TurnStrikes` (skipped for hard pins and `/force-model`).
+`runTurnLoop` folds turn strikes into `AutomaticExcludedModels` for tool-result
+requests and clears them on the next real user prompt
+(`RequestEnvelope.EndsWithUserPrompt`), so the session doesn't swap back to the
+failing model mid-turn.
+
 **Rescued transient failures get a bounded cooldown, not a session-lifetime
 strike.** Under `transient_rate_limit` (default off),
 `maybeStrikeArmAfterRescuedFailure` records a rescued primary's buffered 429 as

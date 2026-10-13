@@ -72,12 +72,12 @@ func (l *stateModelLeaser) Lease(_ context.Context, owner auth.SubscriptionOwner
 
 func TestSubscriptionStateModelsFundingOrder(t *testing.T) {
 	for _, scenario := range []struct {
-		name                                                                                                                                                        string
-		claude, codex, emptyPaid, depleted, liveReject, committedFailure, forced, forcedPin, forceWithRequestSubset, demoteClaude, cooldownClaude, claudeOnlyActive bool
-		utilityTarget, passthroughTarget                                                                                                                            bool
-		paidSetIncludesClaude                                                                                                                                       bool
-		want                                                                                                                                                        string
-		wantErr                                                                                                                                                     bool
+		name                                                                                                                                                                                    string
+		claude, codex, emptyPaid, depleted, liveReject, committedFailure, forced, forcedPin, forceWithRequestSubset, demoteClaude, cooldownClaude, claudeOnlyActive, readmitClaude, rejectCodex bool
+		paidSetIncludesClaude                                                                                                                                                                   bool
+		utilityTarget, passthroughTarget                                                                                                                                                        bool
+		want                                                                                                                                                                                    string
+		wantErr                                                                                                                                                                                 bool
 	}{
 		{name: "Claude included before paid", claude: true, codex: true, want: stateClaudeModel},
 		{name: "Claude exhausted uses active Codex", codex: true, want: stateCodexModel},
@@ -93,6 +93,7 @@ func TestSubscriptionStateModelsFundingOrder(t *testing.T) {
 		{name: "utility target follows subscription state model sets", utilityTarget: true, claude: true, want: stateClaudeModel},
 		{name: "passthrough target follows exhausted funding set", passthroughTarget: true, claude: true, codex: true, want: statePaidModel},
 		{name: "session-demoted Claude selects healthy Codex", claude: true, codex: true, demoteClaude: true, want: stateCodexModel},
+		{name: "turn-struck Claude rescues failed Codex", claude: true, codex: true, demoteClaude: true, readmitClaude: true, rejectCodex: true, depleted: true, want: stateClaudeModel},
 		{name: "session-cooling Claude selects healthy Codex", claude: true, codex: true, cooldownClaude: true, want: stateCodexModel},
 		{name: "depleted credits still serve Codex", codex: true, depleted: true, want: stateCodexModel},
 		{name: "depleted credits prohibit cheap paid fallback", depleted: true, wantErr: true},
@@ -108,6 +109,9 @@ func TestSubscriptionStateModelsFundingOrder(t *testing.T) {
 				claude.outcomes = []fakeOutcome{{writeBytes: []byte("partial answer"), err: &providers.UpstreamStatusError{Status: http.StatusBadGateway}}}
 			}
 			codex := &fakeClient{name: providers.ProviderOpenAI, outcomes: []fakeOutcome{{writeBytes: []byte("included Codex answer")}}}
+			if scenario.rejectCodex {
+				codex.outcomes = []fakeOutcome{{err: &providers.UpstreamErrorResponse{Status: http.StatusTooManyRequests, Body: []byte(`{"error":{"type":"rate_limit_error"}}`)}}}
+			}
 			paid := &fakeClient{name: providers.ProviderOpenRouter, outcomes: []fakeOutcome{{writeBytes: []byte("cheap paid answer")}}}
 			svc := NewService(stateModelRouter{}, map[string]providers.Client{providers.ProviderAnthropic: claude, providers.ProviderOpenAI: codex, providers.ProviderOpenRouter: paid}, nil, false, nil, nil, false, "", "", nil).
 				WithManagedSubscriptions(&stateModelLeaser{activeProviders: map[subscriptions.Provider]bool{subscriptions.ProviderClaude: scenario.claude, subscriptions.ProviderCodex: scenario.codex}})
@@ -125,8 +129,12 @@ func TestSubscriptionStateModelsFundingOrder(t *testing.T) {
 				paidModels = nil
 			}
 			ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenInactiveContextKey{}, paidModels)
+			ctx = withTurnFailures(ctx)
 			if scenario.demoteClaude {
 				ctx = context.WithValue(ctx, SessionDemotedModelsContextKey{}, []string{stateClaudeModel})
+			}
+			if scenario.readmitClaude {
+				ctx = context.WithValue(ctx, SessionStrikeReadmitModelsContextKey{}, []string{stateClaudeModel})
 			}
 			if scenario.cooldownClaude {
 				ctx = context.WithValue(ctx, SessionCooldownModelsContextKey{}, map[string]time.Time{stateClaudeModel: time.Now().Add(time.Minute)})
@@ -205,6 +213,7 @@ func TestSubscriptionStateModelsFundingOrder(t *testing.T) {
 			}
 			if scenario.liveReject && !scenario.wantErr {
 				require.Equal(t, []string{stateClaudeModel, scenario.want}, servedModels)
+				require.Contains(t, turnFailuresFromContext(ctx).models, stateClaudeModel, "the rescued model is struck for the agent turn")
 			}
 		})
 	}

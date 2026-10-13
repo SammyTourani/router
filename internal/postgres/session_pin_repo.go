@@ -29,6 +29,7 @@ func NewSessionPinRepo(tx sqlc.DBTX) *SessionPinRepo {
 var _ sessionpin.Store = (*SessionPinRepo)(nil)
 var _ sessionpin.CooldownStore = (*SessionPinRepo)(nil)
 var _ sessionpin.RecoveryProbeStore = (*SessionPinRepo)(nil)
+var _ sessionpin.TurnStrikeStore = (*SessionPinRepo)(nil)
 
 func (r *SessionPinRepo) Get(ctx context.Context, sessionKey [sessionpin.SessionKeyLen]byte, role string) (sessionpin.Pin, bool, error) {
 	q := dbbudget.Queries(r.tx)
@@ -212,6 +213,23 @@ func (r *SessionPinRepo) ExpireAndCoolDownModel(ctx context.Context, expired ses
 	})
 }
 
+func (r *SessionPinRepo) StrikeTurnModel(ctx context.Context, sessionKey [sessionpin.SessionKeyLen]byte, role, model string) error {
+	q := dbbudget.Queries(r.tx)
+	return q.UpdateSessionPinTurnStrike(ctx, sqlc.UpdateSessionPinTurnStrikeParams{
+		Model:      model,
+		SessionKey: sessionKey[:],
+		Role:       role,
+	})
+}
+
+func (r *SessionPinRepo) ClearTurnStrikes(ctx context.Context, sessionKey [sessionpin.SessionKeyLen]byte, role string) error {
+	q := dbbudget.Queries(r.tx)
+	return q.DeleteSessionPinTurnStrikes(ctx, sqlc.DeleteSessionPinTurnStrikesParams{
+		SessionKey: sessionKey[:],
+		Role:       role,
+	})
+}
+
 func (r *SessionPinRepo) AcquireRecoveryProbe(ctx context.Context, sessionKey [sessionpin.SessionKeyLen]byte, model string, token uuid.UUID, leaseFor time.Duration) (bool, error) {
 	q := dbbudget.Queries(r.tx)
 	rows, err := q.AcquireSessionPinRecoveryProbeLease(ctx, sqlc.AcquireSessionPinRecoveryProbeLeaseParams{
@@ -281,6 +299,7 @@ func toSessionPin(row sqlc.RouterSessionPin) sessionpin.Pin {
 		DisabledProviders:         row.DisabledProviders,
 		DemotedModels:             row.DemotedModels,
 		DemotionCooldowns:         demotionCooldowns(row.DemotionCooldowns),
+		TurnStrikes:               row.TurnStrikes,
 	}
 	// Bounded copy guards against a corrupt row panicking the request handler.
 	copy(pin.SessionKey[:], row.SessionKey)

@@ -1007,6 +1007,7 @@ type RouterSessionPin struct {
 	LastOutputLimitAt         pgtype.Timestamptz
 	ConsecutiveUpgradeVotes   int32
 	DemotionCooldowns         []byte
+	TurnStrikes               []string
 }
 
 type RouterSessionPinRecoveryProbeLease struct {

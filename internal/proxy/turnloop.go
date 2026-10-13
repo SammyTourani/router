@@ -1263,6 +1263,15 @@ func (s *Service) runTurnLoop(
 	// failover and every automatic pin reuse at once, and is the only one an
 	// explicit /force-model of the same model still routes through.
 	demoted := mergeSessionStrikes(pin.DemotedModels, hmmHistory.DemotedModels)
+	// A model rescued earlier in this agent turn stays out until the next
+	// real user prompt, which starts a new turn and readmits it.
+	if turnStrikes := mergeSessionStrikes(pin.TurnStrikes, hmmHistory.TurnStrikes); len(turnStrikes) > 0 {
+		if env.EndsWithUserPrompt() {
+			s.clearTurnStrikes(ctx, res.SessionKey, res.PinRole)
+		} else {
+			demoted = mergeSessionStrikes(demoted, turnStrikes)
+		}
+	}
 	res.SessionStrikeReadmitModels = harnessSafeModels(imageSafeModels(demoted, req.HasImages), req.HasTools)
 	if s.ResolveTransientRateLimit(ctx) && (!forceModelFound || !forcedPinEligible(forceModelPin, req)) {
 		// A transient strike expires: only one request per session/model may

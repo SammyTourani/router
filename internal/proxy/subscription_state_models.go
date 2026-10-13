@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 
@@ -89,6 +90,22 @@ func (s *Service) subscriptionStateModelAvailable(ctx context.Context, req route
 // dispatchSubscriptionStateModels keeps model eligibility separate from funding:
 // each active target must actually use a subscription. Only the exhausted set
 // authorizes a paid attempt, even after a live quota rejection or stale pin.
+// readmitSessionStrikes drops the session's struck models from the request's
+// exclusions: the last resort once every healthy included model failed,
+// mirroring sibling rescue's readmission.
+func readmitSessionStrikes(ctx context.Context, request *router.Request) bool {
+	readmit := sessionStrikeReadmitModelsFromContext(ctx)
+	if len(readmit) == 0 {
+		return false
+	}
+	excluded := maps.Clone(request.AutomaticExcludedModels)
+	for _, model := range readmit {
+		delete(excluded, model)
+	}
+	request.AutomaticExcludedModels = excluded
+	return true
+}
+
 func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failoverInputs) (int, error) {
 	request := *in.subscriptionStateRequest
 	sessionUnavailableModels := modelSet(sessionDemotedModelsFromContext(ctx))
@@ -112,6 +129,7 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 	ctx, rotationBudget := withSubscriptionAdmissionBudget(ctx)
 	hasFixedTarget := request.ForceModel != "" || callerModelPassthroughActive(ctx) ||
 		in.origin == policy.OverrideSourceDeployment || in.origin == policy.OverrideSourceRequest
+	readmitted := false
 	for len(includedModels) > 0 && rotationBudget.remaining > 0 {
 		attemptCtx, attemptReq := s.subscriptionStateRequest(ctx, request, includedModels)
 		attemptCtx = context.WithValue(attemptCtx, subscriptionOnlyAttemptKey{}, true)
@@ -139,6 +157,10 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 			target, err = s.Route(attemptCtx, attemptReq)
 			if err != nil {
 				if errors.Is(err, policy.ErrNoEligibleArm) || errors.Is(err, cluster.ErrAllowlistEmptiesPool) || errors.Is(err, policy.ErrNoRoutableModels) {
+					if !readmitted && readmitSessionStrikes(ctx, &request) {
+						readmitted = true
+						continue
+					}
 					break
 				}
 				return -1, err
@@ -158,6 +180,7 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 			return winner, err
 		}
 		observability.FromContext(ctx).Info("Subscription model unavailable; selecting another included target", "model", target.Model, "provider", target.Provider)
+		recordTurnFailure(ctx, target.Model)
 		remainingModels := includedModels[:0]
 		for _, model := range includedModels {
 			if model != target.Model {

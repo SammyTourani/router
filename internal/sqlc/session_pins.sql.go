@@ -21,7 +21,7 @@ WHERE session_key = $1::bytea
     OR (routing_strategy = '' AND $3::varchar <> 'hmm_beta')
   )
   AND pinned_until > CURRENT_TIMESTAMP
-RETURNING session_key, role, installation_id, pinned_provider, pinned_model, decision_reason, turn_count, pinned_until, first_pinned_at, last_seen_at, last_input_tokens, last_cached_read_tokens, last_cached_write_tokens, last_output_tokens, last_turn_ended_at, consecutive_upstream_errors, last_served_model, has_ever_switched, paired_provider, paired_model, consecutive_overload_errors, disabled_providers, policy_group, routing_strategy, pinned_effort, demoted_models, consecutive_downgrade_votes, last_output_limit_at, consecutive_upgrade_votes, demotion_cooldowns
+RETURNING session_key, role, installation_id, pinned_provider, pinned_model, decision_reason, turn_count, pinned_until, first_pinned_at, last_seen_at, last_input_tokens, last_cached_read_tokens, last_cached_write_tokens, last_output_tokens, last_turn_ended_at, consecutive_upstream_errors, last_served_model, has_ever_switched, paired_provider, paired_model, consecutive_overload_errors, disabled_providers, policy_group, routing_strategy, pinned_effort, demoted_models, consecutive_downgrade_votes, last_output_limit_at, consecutive_upgrade_votes, demotion_cooldowns, turn_strikes
 `
 
 type DeleteSessionPinParams struct {
@@ -42,7 +42,7 @@ type DeleteSessionPinParams struct {
 //	    OR (routing_strategy = '' AND $3::varchar <> 'hmm_beta')
 //	  )
 //	  AND pinned_until > CURRENT_TIMESTAMP
-//	RETURNING session_key, role, installation_id, pinned_provider, pinned_model, decision_reason, turn_count, pinned_until, first_pinned_at, last_seen_at, last_input_tokens, last_cached_read_tokens, last_cached_write_tokens, last_output_tokens, last_turn_ended_at, consecutive_upstream_errors, last_served_model, has_ever_switched, paired_provider, paired_model, consecutive_overload_errors, disabled_providers, policy_group, routing_strategy, pinned_effort, demoted_models, consecutive_downgrade_votes, last_output_limit_at, consecutive_upgrade_votes, demotion_cooldowns
+//	RETURNING session_key, role, installation_id, pinned_provider, pinned_model, decision_reason, turn_count, pinned_until, first_pinned_at, last_seen_at, last_input_tokens, last_cached_read_tokens, last_cached_write_tokens, last_output_tokens, last_turn_ended_at, consecutive_upstream_errors, last_served_model, has_ever_switched, paired_provider, paired_model, consecutive_overload_errors, disabled_providers, policy_group, routing_strategy, pinned_effort, demoted_models, consecutive_downgrade_votes, last_output_limit_at, consecutive_upgrade_votes, demotion_cooldowns, turn_strikes
 func (q *Queries) DeleteSessionPin(ctx context.Context, arg DeleteSessionPinParams) (RouterSessionPin, error) {
 	row := q.db.QueryRow(ctx, deleteSessionPin, arg.SessionKey, arg.Role, arg.ExpectedRoutingStrategy)
 	var i RouterSessionPin
@@ -77,6 +77,7 @@ func (q *Queries) DeleteSessionPin(ctx context.Context, arg DeleteSessionPinPara
 		&i.LastOutputLimitAt,
 		&i.ConsecutiveUpgradeVotes,
 		&i.DemotionCooldowns,
+		&i.TurnStrikes,
 	)
 	return i, err
 }
@@ -115,6 +116,31 @@ func (q *Queries) DeleteSessionPinDemotionCooldown(ctx context.Context, arg Dele
 		arg.Role,
 		arg.ObservedUntil,
 	)
+	return err
+}
+
+const deleteSessionPinTurnStrikes = `-- name: DeleteSessionPinTurnStrikes :exec
+UPDATE router.session_pins
+SET turn_strikes = '{}'
+WHERE session_key = $1::bytea
+  AND role = $2::varchar
+  AND turn_strikes <> '{}'
+`
+
+type DeleteSessionPinTurnStrikesParams struct {
+	SessionKey []byte
+	Role       string
+}
+
+// Clears the agent-turn strikes once a real user prompt starts the next turn.
+//
+//	UPDATE router.session_pins
+//	SET turn_strikes = '{}'
+//	WHERE session_key = $1::bytea
+//	  AND role = $2::varchar
+//	  AND turn_strikes <> '{}'
+func (q *Queries) DeleteSessionPinTurnStrikes(ctx context.Context, arg DeleteSessionPinTurnStrikesParams) error {
+	_, err := q.db.Exec(ctx, deleteSessionPinTurnStrikes, arg.SessionKey, arg.Role)
 	return err
 }
 
@@ -350,7 +376,7 @@ func (q *Queries) ExpireAndDemoteSessionPinModel(ctx context.Context, arg Expire
 }
 
 const getSessionPin = `-- name: GetSessionPin :one
-SELECT session_key, role, installation_id, pinned_provider, pinned_model, decision_reason, turn_count, pinned_until, first_pinned_at, last_seen_at, last_input_tokens, last_cached_read_tokens, last_cached_write_tokens, last_output_tokens, last_turn_ended_at, consecutive_upstream_errors, last_served_model, has_ever_switched, paired_provider, paired_model, consecutive_overload_errors, disabled_providers, policy_group, routing_strategy, pinned_effort, demoted_models, consecutive_downgrade_votes, last_output_limit_at, consecutive_upgrade_votes, demotion_cooldowns
+SELECT session_key, role, installation_id, pinned_provider, pinned_model, decision_reason, turn_count, pinned_until, first_pinned_at, last_seen_at, last_input_tokens, last_cached_read_tokens, last_cached_write_tokens, last_output_tokens, last_turn_ended_at, consecutive_upstream_errors, last_served_model, has_ever_switched, paired_provider, paired_model, consecutive_overload_errors, disabled_providers, policy_group, routing_strategy, pinned_effort, demoted_models, consecutive_downgrade_votes, last_output_limit_at, consecutive_upgrade_votes, demotion_cooldowns, turn_strikes
 FROM router.session_pins
 WHERE session_key = $1::bytea
   AND role        = $2::varchar
@@ -368,7 +394,7 @@ type GetSessionPinParams struct {
 // last_turn_ended_at carry the previous turn's upstream usage; the
 // planner reads them to weigh switch EV against eviction cost.
 //
-//	SELECT session_key, role, installation_id, pinned_provider, pinned_model, decision_reason, turn_count, pinned_until, first_pinned_at, last_seen_at, last_input_tokens, last_cached_read_tokens, last_cached_write_tokens, last_output_tokens, last_turn_ended_at, consecutive_upstream_errors, last_served_model, has_ever_switched, paired_provider, paired_model, consecutive_overload_errors, disabled_providers, policy_group, routing_strategy, pinned_effort, demoted_models, consecutive_downgrade_votes, last_output_limit_at, consecutive_upgrade_votes, demotion_cooldowns
+//	SELECT session_key, role, installation_id, pinned_provider, pinned_model, decision_reason, turn_count, pinned_until, first_pinned_at, last_seen_at, last_input_tokens, last_cached_read_tokens, last_cached_write_tokens, last_output_tokens, last_turn_ended_at, consecutive_upstream_errors, last_served_model, has_ever_switched, paired_provider, paired_model, consecutive_overload_errors, disabled_providers, policy_group, routing_strategy, pinned_effort, demoted_models, consecutive_downgrade_votes, last_output_limit_at, consecutive_upgrade_votes, demotion_cooldowns, turn_strikes
 //	FROM router.session_pins
 //	WHERE session_key = $1::bytea
 //	  AND role        = $2::varchar
@@ -406,6 +432,7 @@ func (q *Queries) GetSessionPin(ctx context.Context, arg GetSessionPinParams) (R
 		&i.LastOutputLimitAt,
 		&i.ConsecutiveUpgradeVotes,
 		&i.DemotionCooldowns,
+		&i.TurnStrikes,
 	)
 	return i, err
 }
@@ -580,6 +607,34 @@ WHERE pinned_until < now() - interval '24 hours'
 //	WHERE pinned_until < now() - interval '24 hours'
 func (q *Queries) SweepExpiredSessionPins(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, sweepExpiredSessionPins)
+	return err
+}
+
+const updateSessionPinTurnStrike = `-- name: UpdateSessionPinTurnStrike :exec
+UPDATE router.session_pins
+SET turn_strikes = array_append(turn_strikes, $1::varchar)
+WHERE session_key = $2::bytea
+  AND role = $3::varchar
+  AND NOT ($1::varchar = ANY(turn_strikes))
+`
+
+type UpdateSessionPinTurnStrikeParams struct {
+	Model      string
+	SessionKey []byte
+	Role       string
+}
+
+// Records model as failed for the current agent turn on an existing
+// (session_key, role) row (deduped). Upsert never touches turn_strikes, so the
+// strike survives the pin rewrite to the rescuing model.
+//
+//	UPDATE router.session_pins
+//	SET turn_strikes = array_append(turn_strikes, $1::varchar)
+//	WHERE session_key = $2::bytea
+//	  AND role = $3::varchar
+//	  AND NOT ($1::varchar = ANY(turn_strikes))
+func (q *Queries) UpdateSessionPinTurnStrike(ctx context.Context, arg UpdateSessionPinTurnStrikeParams) error {
+	_, err := q.db.Exec(ctx, updateSessionPinTurnStrike, arg.Model, arg.SessionKey, arg.Role)
 	return err
 }
 
