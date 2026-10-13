@@ -108,15 +108,15 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 	}
 	in.subscriptionStateRequest = nil
 	in.alternatives = nil
-	activeModels := s.includedSubscriptionModels(ctx, request, in.subscriptionStateHeaders)
+	includedModels := s.includedSubscriptionModels(ctx, request, in.subscriptionStateHeaders)
 	request.PreferredModels = append(append([]string{}, installationSubscriptionModelsWhenActiveFromContext(ctx)...), request.PreferredModels...)
 	rotationBudget, cancel := context.WithTimeout(ctx, subscriptionRotationBudget)
 	defer cancel()
 	ctx = context.WithValue(ctx, subscriptionRotationBudgetKey{}, rotationBudget)
 	hasFixedTarget := request.ForceModel != "" || callerModelPassthroughActive(ctx) ||
 		in.origin == policy.OverrideSourceDeployment || in.origin == policy.OverrideSourceRequest
-	for len(activeModels) > 0 && rotationBudget.Err() == nil {
-		attemptCtx, attemptReq := s.subscriptionStateRequest(ctx, request, activeModels)
+	for len(includedModels) > 0 && rotationBudget.Err() == nil {
+		attemptCtx, attemptReq := s.subscriptionStateRequest(ctx, request, includedModels)
 		attemptCtx = context.WithValue(attemptCtx, subscriptionOnlyAttemptKey{}, true)
 		attemptReq.EnabledProviders = make(map[string]struct{})
 		excludedProviders := s.excludedProvidersForRequest(ctx)
@@ -161,13 +161,13 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 			return winner, err
 		}
 		observability.FromContext(ctx).Info("Subscription model unavailable; selecting another included target", "model", target.Model, "provider", target.Provider)
-		remainingModels := activeModels[:0]
-		for _, model := range activeModels {
+		remainingModels := includedModels[:0]
+		for _, model := range includedModels {
 			if model != target.Model {
 				remainingModels = append(remainingModels, model)
 			}
 		}
-		activeModels = remainingModels
+		includedModels = remainingModels
 		if hasFixedTarget {
 			break
 		}
@@ -219,7 +219,7 @@ func (s *Service) includedSubscriptionModels(ctx context.Context, req router.Req
 	preferred := installationSubscriptionModelsWhenActiveFromContext(ctx)
 	candidates := append([]string{}, preferred...)
 	for _, entry := range catalog.Models {
-		if entry.ID != "" && !slices.Contains(preferred, entry.ID) {
+		if !slices.Contains(preferred, entry.ID) {
 			candidates = append(candidates, entry.ID)
 		}
 	}
