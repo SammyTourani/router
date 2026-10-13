@@ -2,7 +2,10 @@ package proxy
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -144,4 +147,61 @@ func TestTurnStrikeSkippedWhenTurnFailedOrPinned(t *testing.T) {
 			assert.Empty(t, store.strikes)
 		})
 	}
+}
+
+const siblingAnthropicStream = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"sibling\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-5-5\",\"content\":[],\"usage\":{\"input_tokens\":11,\"output_tokens\":0}}}\n\n" +
+	"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"rescued\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+	"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+// siblingChainClient fails the listed models and serves every other model.
+type siblingChainClient struct {
+	failing map[string]bool
+	failed  []string
+}
+
+func (c *siblingChainClient) Proxy(_ context.Context, decision router.Decision, _ providers.PreparedRequest, w http.ResponseWriter, _ *http.Request) error {
+	if c.failing[decision.Model] {
+		c.failed = append(c.failed, decision.Model)
+		return &providers.UpstreamErrorResponse{Status: http.StatusServiceUnavailable, Body: []byte(`{"type":"error","error":{"type":"overloaded_error"}}`)}
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	_, _ = io.WriteString(w, siblingAnthropicStream)
+	return nil
+}
+
+func (c *siblingChainClient) Passthrough(context.Context, providers.PreparedRequest, http.ResponseWriter, *http.Request) error {
+	return providers.ErrNotImplemented
+}
+
+// Every sibling that fails before a later sibling serves is struck for the
+// turn, not only the primary.
+func TestSiblingRescueRecordsEveryFailedModel(t *testing.T) {
+	anthropicClient := &siblingChainClient{failing: map[string]bool{"claude-opus-5": true}}
+	openAIClient := &siblingChainClient{failing: map[string]bool{"gpt-5.6-luna": true}}
+	decision := router.Decision{
+		Provider: providers.ProviderAnthropic,
+		Model:    "claude-opus-5",
+		Reason:   "test",
+		Metadata: &router.RoutingMetadata{
+			CandidateModels:    []string{"claude-opus-5", "gpt-5.6-luna", "claude-sonnet-5-5"},
+			CandidateProviders: map[string]string{"gpt-5.6-luna": providers.ProviderOpenAI, "claude-sonnet-5-5": providers.ProviderAnthropic},
+		},
+	}
+	svc := NewService(staticRouter{decision: decision}, map[string]providers.Client{
+		providers.ProviderAnthropic: anthropicClient,
+		providers.ProviderOpenAI:    openAIClient,
+	}, nil, false, nil, nil, false, providers.ProviderAnthropic, "claude-haiku-4-5", nil).
+		WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}, providers.ProviderOpenAI: {}})
+	svc.retrySleep = noopSleep
+	ctx := withTurnFailures(context.Background())
+
+	body := `{"model":"claude-opus-5","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"read main.go"}]}`
+	rec := httptest.NewRecorder()
+	require.NoError(t, svc.ProxyMessages(ctx, []byte(body), rec,
+		httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))))
+
+	require.Contains(t, rec.Body.String(), "rescued")
+	require.Contains(t, anthropicClient.failed, "claude-opus-5")
+	require.Contains(t, openAIClient.failed, "gpt-5.6-luna", "the first sibling fails before the second serves")
+	assert.ElementsMatch(t, []string{"claude-opus-5", "gpt-5.6-luna"}, turnFailuresFromContext(ctx).models)
 }

@@ -5090,6 +5090,7 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 				"sibling_provider", siblingDecision.Provider,
 				"upstream_status", upstreamStatus(proxyErr),
 				"err", proxyErr)
+			recordTurnFailure(ctx, decision.Model)
 			if !siblingRescueRan {
 				rescuedPrimary = decision
 				rescuedPrimaryErr = proxyErr
@@ -8205,6 +8206,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 				"sibling_provider", siblingDecision.Provider,
 				"upstream_status", upstreamStatus(proxyErr),
 				"err", proxyErr)
+			recordTurnFailure(ctx, decision.Model)
 			if !siblingRescueRan {
 				rescuedPrimary = decision
 				rescuedPrimaryErr = proxyErr
