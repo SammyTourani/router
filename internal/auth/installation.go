@@ -25,7 +25,8 @@ type Installation struct {
 	// routing is confined to these models minus ExcludedModels.
 	// Empty = no restriction; fail-closed when no eligible overlap remains.
 	AllowedModels []string
-	// SubscriptionStateModelsEnabled turns on the subscription-state model sets.
+	// SubscriptionStateModelsEnabled makes the two model sets authoritative, so an
+	// empty set refuses that state's serving instead of falling back to the catalog.
 	SubscriptionStateModelsEnabled bool
 	// ModelsWhenSubscriptionActive is the catalog minus the active-state
 	// exclusions: the preference for included Claude or Codex capacity.
