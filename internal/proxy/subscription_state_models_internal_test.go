@@ -17,6 +17,7 @@ import (
 	"weave-os/router/internal/proxy/usage"
 	"weave-os/router/internal/translate"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"weave-os/router/internal/billing"
 	"weave-os/router/internal/inference"
@@ -472,4 +473,11 @@ func TestSubscriptionStateModelsRespectManagedBoostAllowlist(t *testing.T) {
 	ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenActiveContextKey{}, []string{stateClaudeModel, stateCodexModel})
 	ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenInactiveContextKey{}, []string{statePaidModel})
 	require.Equal(t, map[string]struct{}{stateCodexModel: {}}, allowedModelsForRequest(ctx))
+}
+
+func TestSubscriptionStateModelsEnabledByFlagWithEmptySets(t *testing.T) {
+	ctx := context.WithValue(context.Background(), InstallationSubscriptionStateModelsEnabledContextKey{}, true)
+
+	assert.True(t, subscriptionStateModelsEnabled(ctx))
+	assert.Empty(t, installationAllowedModelSet(context.WithValue(ctx, subscriptionStateAllowedModelsKey{}, modelSet(nil))))
 }

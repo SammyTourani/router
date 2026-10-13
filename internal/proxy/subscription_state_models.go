@@ -20,8 +20,10 @@ import (
 type subscriptionStateAllowedModelsKey struct{}
 
 func subscriptionStateModelsEnabled(ctx context.Context) bool {
+	enabled, _ := ctx.Value(InstallationSubscriptionStateModelsEnabledContextKey{}).(bool)
 	return !subscriptionFundingOutOfPlayForRequest(ctx) &&
-		(len(installationSubscriptionModelsWhenActiveFromContext(ctx)) > 0 ||
+		(enabled ||
+			len(installationSubscriptionModelsWhenActiveFromContext(ctx)) > 0 ||
 			len(installationSubscriptionModelsWhenInactiveFromContext(ctx)) > 0)
 }
 

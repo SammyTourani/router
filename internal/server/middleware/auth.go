@@ -159,6 +159,9 @@ func withAPIKey(svc *auth.Service, byokRequiresOptIn bool, serving ...*ServingAd
 			if len(installation.AllowedModels) > 0 {
 				ctx = context.WithValue(ctx, proxy.InstallationAllowedModelsContextKey{}, installation.AllowedModels)
 			}
+			if installation.SubscriptionStateModelsEnabled {
+				ctx = context.WithValue(ctx, proxy.InstallationSubscriptionStateModelsEnabledContextKey{}, true)
+			}
 			if len(installation.ModelsWhenSubscriptionActive) > 0 {
 				ctx = context.WithValue(ctx, proxy.InstallationSubscriptionModelsWhenActiveContextKey{}, installation.ModelsWhenSubscriptionActive)
 			}

@@ -25,11 +25,13 @@ type Installation struct {
 	// routing is confined to these models minus ExcludedModels.
 	// Empty = no restriction; fail-closed when no eligible overlap remains.
 	AllowedModels []string
-	// ModelsWhenSubscriptionActive limits models served through included Claude
-	// or Codex capacity. Empty refuses included serving when either set is configured.
+	// SubscriptionStateModelsEnabled turns on the subscription-state model sets.
+	SubscriptionStateModelsEnabled bool
+	// ModelsWhenSubscriptionActive is the catalog minus the active-state
+	// exclusions: the preference for included Claude or Codex capacity.
 	ModelsWhenSubscriptionActive []string
-	// ModelsWhenSubscriptionInactive limits paid fallback after included targets
-	// are unavailable. Empty refuses paid fallback when either set is configured.
+	// ModelsWhenSubscriptionInactive is the catalog minus the exhausted-state
+	// exclusions: the limit for paid fallback. Empty refuses paid fallback when enabled.
 	ModelsWhenSubscriptionInactive []string
 	// ExcludedProviders is the per-installation provider exclusion list.
 	// Empty means no exclusion.
