@@ -30,11 +30,34 @@ func markSubscriptionClientAppRefused(ctx context.Context) {
 	}
 }
 
+// APIKeyPaidFallbackOnSubscriptionRefusalContextKey carries the authenticated
+// key's admin opt-in (bool) to serve forced Claude turns on paid API capacity
+// when every linked subscription refuses the client app. Absent means no.
+type APIKeyPaidFallbackOnSubscriptionRefusalContextKey struct{}
+
+type clientAppRefusalPaidFallbackKey struct{}
+
+// withClientAppRefusalPaidFallback marks a dispatch whose forced Claude turn the
+// key opted into paid capacity, so subscriptions that refused the client app
+// count as spent rather than blocking the paid attempt.
+func withClientAppRefusalPaidFallback(ctx context.Context, decision router.Decision) context.Context {
+	consented, _ := ctx.Value(APIKeyPaidFallbackOnSubscriptionRefusalContextKey{}).(bool)
+	if !consented || !strings.HasPrefix(decision.Reason, translate.ReasonUserForceModel) {
+		return ctx
+	}
+	return context.WithValue(ctx, clientAppRefusalPaidFallbackKey{}, true)
+}
+
+func clientAppRefusalPaidFallback(ctx context.Context) bool {
+	allowed, _ := ctx.Value(clientAppRefusalPaidFallbackKey{}).(bool)
+	return allowed
+}
+
 // forcedClaudeClientAppRefused reports whether a paid attempt would only stand
 // in for subscriptions that refused this client app on a forced model. Routed
 // turns additionally require independent pool-wide funding authorization.
 func forcedClaudeClientAppRefused(ctx context.Context, decision router.Decision, creds *Credentials) bool {
-	if creds != nil && (creds.OAuth || creds.Source == credSourceBYOK) {
+	if creds != nil && (creds.OAuth || creds.Source == credSourceBYOK) || clientAppRefusalPaidFallback(ctx) {
 		return false
 	}
 	usage, _ := ctx.Value(ManagedSubscriptionUsageContextKey{}).(*ManagedSubscriptionUsage)

@@ -80,6 +80,21 @@ executor operation even when its underlying cause would otherwise be retryable.
 Anthropic third-party refusals are classified narrowly per account and client
 app. The router does not infer that all non-Claude-Code clients are incompatible
 or forge provider attestation headers; a refusal cannot authorize paid rescue.
+A forced Claude turn whose seats all refused the client app fails with 403.
+
+The one exception is an admin opt-in on a single router key. A key with
+`paid_fallback_on_subscription_refusal` set serves those forced turns on paid
+API capacity: a seat that refused the turn's client app counts as spent, beside
+seats with exhaustion evidence. Routed turns and every other failure keep the
+rules above, and no request header can opt in. There is no admin API for the
+flag; an operator sets it directly and it takes effect within the five-minute
+API-key cache TTL:
+
+```sql
+UPDATE router.model_router_api_keys
+SET paid_fallback_on_subscription_refusal = TRUE
+WHERE id = '<api-key-id>'::uuid AND deleted_at IS NULL;
+```
 
 Providers control extra usage through account settings and credits. Quota headers
 are observations, not an atomic included-only reservation: an unobserved Claude

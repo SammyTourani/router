@@ -111,6 +111,7 @@ func (s *Service) dispatchPlanned(ctx context.Context, in failoverInputs, plan i
 	lastIdx := 0
 	managedBinding := false
 	ctx, rotationBudget := withSubscriptionAdmissionBudget(ctx)
+	ctx = withClientAppRefusalPaidFallback(ctx, in.initialDecision)
 	transport := dispatch.Transport{
 		OperationID: string(in.purpose),
 		Committed:   func() bool { return committed(in.buf) },

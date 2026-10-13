@@ -234,3 +234,63 @@ func TestRotationBudgetPaidRescueRejectsForcedThirdPartyRefusal(t *testing.T) {
 	require.ErrorIs(t, err, ErrSubscriptionClientAppRefused)
 	assert.Zero(t, apiCalls, "the rotation-budget paid rescue must not serve a forced Claude turn the subscriptions refused")
 }
+
+// admittedThirdPartyRefusalContext admits the one linked seat the leaser hands
+// out, so paid authorization judges that seat rather than a missing snapshot.
+func admittedThirdPartyRefusalContext(paidFallbackConsented bool) context.Context {
+	ctx := WithManagedSubscriptionCandidates(managedSubscriptionTestContext(), []*auth.SubscriptionAccount{{
+		ID: "opaque-a", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive,
+	}})
+	if paidFallbackConsented {
+		ctx = context.WithValue(ctx, APIKeyPaidFallbackOnSubscriptionRefusalContextKey{}, true)
+	}
+	return clientAppContext(ctx, ClientAppOpencode)
+}
+
+func newThirdPartyRefusalService(t *testing.T) (*Service, *parityUpstream) {
+	t.Helper()
+	leaser := &scriptedSubscriptionLeaser{
+		leases:     []subscriptions.Lease{{AccountID: "opaque-a", AccessToken: "token-a"}},
+		repeatLast: true,
+	}
+	upstream := &parityUpstream{subErr: thirdPartyRefusalError(), okBody: "served"}
+	svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderAnthropic: upstream}).
+		WithManagedSubscriptions(leaser).
+		WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}})
+	svc.retrySleep = noopSleep
+	return svc, upstream
+}
+
+func TestForcedThirdPartyRefusalPaysOnlyWhenKeyConsents(t *testing.T) {
+	t.Run("consenting key is served on paid capacity", func(t *testing.T) {
+		svc, upstream := newThirdPartyRefusalService(t)
+
+		for turn := range 2 {
+			recorder, err := dispatchManagedThirdPartyTurnWithReason(t, svc, admittedThirdPartyRefusalContext(true), translate.ReasonUserForceModel)
+			require.NoError(t, err)
+			assert.Equal(t, "served", recorder.Body.String())
+			assert.Equal(t, turn+1, upstream.paidDispatches)
+		}
+		assert.Equal(t, 1, upstream.subDispatches, "the refused seat stays skipped for this client app")
+	})
+
+	t.Run("key without consent still fails the forced turn", func(t *testing.T) {
+		svc, upstream := newThirdPartyRefusalService(t)
+
+		_, err := dispatchManagedThirdPartyTurnWithReason(t, svc, admittedThirdPartyRefusalContext(false), translate.ReasonUserForceModel)
+
+		require.ErrorIs(t, err, ErrSubscriptionClientAppRefused)
+		assert.Equal(t, 1, upstream.subDispatches)
+		assert.Zero(t, upstream.paidDispatches)
+	})
+
+	t.Run("consent does not fund routed turns", func(t *testing.T) {
+		svc, upstream := newThirdPartyRefusalService(t)
+
+		_, err := dispatchManagedThirdPartyTurn(t, svc, admittedThirdPartyRefusalContext(true))
+
+		require.Error(t, err)
+		assert.Equal(t, 1, upstream.subDispatches)
+		assert.Zero(t, upstream.paidDispatches, "a refusal is not quota proof for a routed turn")
+	})
+}
