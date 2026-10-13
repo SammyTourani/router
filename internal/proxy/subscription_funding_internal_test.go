@@ -216,11 +216,11 @@ func TestSubscriptionFundingObservedQuotaAndAdmissionSnapshotAreDetached(t *test
 	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{account})
 	account.State = auth.SubscriptionAccountStateExhausted
 	svc := newServiceWithProviders(t, nil)
-	require.ErrorIs(t, svc.authorizeSubscriptionAPI(ctx, subscriptions.ProviderClaude, "", "", ""), ErrSubscriptionPoolUnavailable)
+	require.ErrorIs(t, svc.authorizeSubscriptionAPI(ctx, subscriptions.ProviderClaude, "", "", clientAppRefusalFunding{}), ErrSubscriptionPoolUnavailable)
 	observer := usage.NewObserver([]byte("synthetic-salt"), time.Minute, time.Now)
 	observer.Record(observer.Key([]byte("subscription-account:seat")), usage.Snapshot{Primary: usage.Window{UsedPercent: 1, WindowMinutes: 300, ResetAt: resetAt}})
 	svc.WithUsageObserver(observer)
-	require.NoError(t, svc.authorizeSubscriptionAPI(ctx, subscriptions.ProviderClaude, "", "", ""))
+	require.NoError(t, svc.authorizeSubscriptionAPI(ctx, subscriptions.ProviderClaude, "", "", clientAppRefusalFunding{}))
 }
 
 func TestSubscriptionAdmissionBudgetChargesLeasingNotInference(t *testing.T) {
@@ -267,11 +267,11 @@ func TestSubscriptionFundingExpiredShortWindowCannotAuthorizeAPI(t *testing.T) {
 					observer.Record(key, usage.Snapshot{Secondary: usage.Window{UsedPercent: 0.6, WindowMinutes: 10080}})
 				}
 				now = observedAt.Add(4 * time.Hour)
-				require.NoError(t, svc.authorizeSubscriptionAPI(ctx, subscriptions.ProviderCodex, directToken, "", ""))
+				require.NoError(t, svc.authorizeSubscriptionAPI(ctx, subscriptions.ProviderCodex, directToken, "", clientAppRefusalFunding{}))
 				now = observedAt.Add(6 * time.Hour)
 				_, cached := observer.Snapshot(key)
 				require.True(t, cached, "the weekly reading intentionally keeps this snapshot cached")
-				require.ErrorIs(t, svc.authorizeSubscriptionAPI(ctx, subscriptions.ProviderCodex, directToken, "", ""), ErrSubscriptionPoolUnavailable,
+				require.ErrorIs(t, svc.authorizeSubscriptionAPI(ctx, subscriptions.ProviderCodex, directToken, "", clientAppRefusalFunding{}), ErrSubscriptionPoolUnavailable,
 					"a stale short-window cap is not current quota proof")
 			})
 		}

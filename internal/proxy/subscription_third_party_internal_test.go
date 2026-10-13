@@ -239,13 +239,17 @@ func TestRotationBudgetPaidRescueRejectsForcedThirdPartyRefusal(t *testing.T) {
 // admittedThirdPartyRefusalContext admits the one linked seat the leaser hands
 // out, so paid authorization judges that seat rather than a missing snapshot.
 func admittedThirdPartyRefusalContext(paidFallbackConsented bool) context.Context {
+	return admittedClientRefusalContext(paidFallbackConsented, ClientAppOpencode)
+}
+
+func admittedClientRefusalContext(paidFallbackConsented bool, clientApp string) context.Context {
 	ctx := WithManagedSubscriptionCandidates(managedSubscriptionTestContext(), []*auth.SubscriptionAccount{{
 		ID: "opaque-a", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive,
 	}})
 	if paidFallbackConsented {
 		ctx = context.WithValue(ctx, APIKeyPaidFallbackOnSubscriptionRefusalContextKey{}, true)
 	}
-	return clientAppContext(ctx, ClientAppOpencode)
+	return clientAppContext(ctx, clientApp)
 }
 
 func newThirdPartyRefusalService(t *testing.T) (*Service, *parityUpstream) {
@@ -273,6 +277,17 @@ func TestForcedThirdPartyRefusalPaysOnlyWhenKeyConsents(t *testing.T) {
 			assert.Equal(t, turn+1, upstream.paidDispatches)
 		}
 		assert.Equal(t, 1, upstream.subDispatches, "the refused seat stays skipped for this client app")
+	})
+
+	t.Run("consenting key with an unrecognized client is served on paid capacity", func(t *testing.T) {
+		svc, upstream := newThirdPartyRefusalService(t)
+
+		recorder, err := dispatchManagedThirdPartyTurnWithReason(t, svc, admittedClientRefusalContext(true, ""), translate.ReasonUserForceModel)
+
+		require.NoError(t, err)
+		assert.Equal(t, "served", recorder.Body.String())
+		assert.Equal(t, 1, upstream.subDispatches)
+		assert.Equal(t, 1, upstream.paidDispatches)
 	})
 
 	t.Run("key without consent still fails the forced turn", func(t *testing.T) {

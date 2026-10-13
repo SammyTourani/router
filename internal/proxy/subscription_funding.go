@@ -77,11 +77,8 @@ func (s *Service) withSubscriptionFundingAuthorization(ctx context.Context, head
 		if !compatible {
 			return nil
 		}
-		refusedClientApp := ""
-		if clientAppRefusalPaidFallback(callCtx) {
-			refusedClientApp = ClientIdentityFrom(callCtx).ClientApp
-		}
-		if err := s.authorizeSubscriptionAPI(admissionCtx, pool, codexToken, claudeToken, refusedClientApp); err != nil {
+		refusal := clientAppRefusalFunding{counts: clientAppRefusalPaidFallback(callCtx), clientApp: ClientIdentityFrom(callCtx).ClientApp}
+		if err := s.authorizeSubscriptionAPI(admissionCtx, pool, codexToken, claudeToken, refusal); err != nil {
 			observability.FromContext(callCtx).Warn("Blocked API inference without subscription quota-exhaustion evidence", "model", target.CatalogID, "provider", target.Provider, "subscription_provider", pool, "err", err)
 			return err
 		}
@@ -94,9 +91,15 @@ func (s *Service) subscriptionAPIAuthorization(ctx context.Context, provider, mo
 	return dispatch.AuthorizationFromContext(ctx)(clearCredentials(ctx), inference.Target{Provider: provider, CatalogID: model})
 }
 
-// A Claude seat that refused refusedClientApp counts as spent. Only a key's
-// paid-fallback opt-in on a forced turn passes a non-empty client app.
-func (s *Service) authorizeSubscriptionAPI(ctx context.Context, pool subscriptions.Provider, codexToken, claudeToken, refusedClientApp string) error {
+// clientAppRefusalFunding lets a Claude seat that refused clientApp count as
+// spent. Only a key's paid-fallback opt-in on a forced turn sets counts; an
+// unrecognized client legitimately has an empty clientApp.
+type clientAppRefusalFunding struct {
+	counts    bool
+	clientApp string
+}
+
+func (s *Service) authorizeSubscriptionAPI(ctx context.Context, pool subscriptions.Provider, codexToken, claudeToken string, refusal clientAppRefusalFunding) error {
 	if managedSubscriptionEnrollmentUnavailable(ctx) {
 		return fmt.Errorf("%w: subscription enrollment could not be verified", ErrSubscriptionPoolUnavailable)
 	}
@@ -110,7 +113,7 @@ func (s *Service) authorizeSubscriptionAPI(ctx context.Context, pool subscriptio
 		if s.managedAccountQuotaExhausted(ctx, candidate, now) {
 			continue
 		}
-		if refusedClientApp != "" && pool == subscriptions.ProviderClaude && s.subscriptionModels.managedClientAppDenied(candidate.accountID, providers.ProviderAnthropic, refusedClientApp, now) {
+		if refusal.counts && pool == subscriptions.ProviderClaude && s.subscriptionModels.managedClientAppDenied(candidate.accountID, providers.ProviderAnthropic, refusal.clientApp, now) {
 			continue
 		}
 		return fmt.Errorf("%w: included quota is available or unknown", ErrSubscriptionPoolUnavailable)
