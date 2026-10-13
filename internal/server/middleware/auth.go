@@ -142,14 +142,7 @@ func withAPIKey(svc *auth.Service, byokRequiresOptIn bool, serving ...*ServingAd
 					observability.FromContext(ctx).Error("Failed to load subscription account enrollment", "err", listErr)
 					ctx = context.WithValue(ctx, proxy.ManagedSubscriptionEnrollmentUnavailableContextKey{}, true)
 				} else {
-					enrolled := make(map[auth.SubscriptionProvider]struct{})
-					for _, account := range accounts {
-						enrolled[account.Provider] = struct{}{}
-					}
-					if len(enrolled) > 0 {
-						ctx = context.WithValue(ctx, proxy.ManagedSubscriptionProvidersContextKey{}, enrolled)
-					}
-
+					ctx = proxy.WithManagedSubscriptionCandidates(ctx, accounts)
 				}
 			}
 		}

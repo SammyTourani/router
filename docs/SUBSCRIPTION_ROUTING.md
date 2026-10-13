@@ -12,21 +12,25 @@ personal capacity. A personal key borrows shared capacity only while its owner
 is still an active member; a live installation-shared key (no credential
 subject) borrows it whenever sharing is on. Enrollment keys are attribution only and do not partition
 serving pools. Refresh, quota, cooldown, and rotation use physical account identity.
-The ten-second rotation budget is shared across account and model alternatives.
-It limits leasing and starting included attempts; an admitted attempt is never
-canceled by it and finishes under the provider timeouts and the caller deadline.
+The ten-second admission budget is shared across account and model alternatives,
+including executor re-entry. Only credential leasing consumes it; time spent
+running provider inference does not prevent another eligible seat from being tried.
+An admitted attempt finishes under provider timeouts and the caller deadline.
+Linked account/model pairs are attempted once per request, within its admission snapshot.
+Budget expiry refuses further admission; it never grants permission to buy API.
 
 Automatic alternatives reuse the existing policy's request-compatible ordering
 and preserve the selected quality tier, tool/context exclusions and provider
 allowlist. Explicit models stay fixed. Boost follows stable source ordering; Max
 retains its existing subscription exclusion. After eligible included capacity is
-exhausted, authorized API capacity serves the originally selected model unless
+positively quota-exhausted, authorized API capacity serves the originally selected model unless
 subscription-aware model sets are configured. With those sets enabled, the
 active set limits included Claude/Codex targets and the exhausted set limits
 paid fallback. Exhausting Claude does not make its active-only models eligible
 for paid use while Codex remains available. Every selected included target must
 actually use a subscription; after eligible active targets are unavailable,
-the router selects a request-compatible model from the exhausted set. The
+the router may select a request-compatible model from the exhausted set, subject
+to the same funding authorization. The
 installation allowlist and request safety constraints still apply to both sets.
 An empty enabled state refuses that funding lane. Disabling the sets retains
 ordinary routing; Max continues to ignore linked subscriptions and these sets.
@@ -51,6 +55,30 @@ quota observation may serve; known exhausted or paid-overage accounts are
 excluded. Quota failures rotate to another eligible account before authorized
 Weave-funded API capacity serves the selected model. Depleted Weave credits
 prohibit paid API fallback, not subscription use.
+
+## Paid inference authorization
+
+Immediately before every provider inference call, the dispatch executor checks
+the final credentials against credential-free admission facts retained from the
+primary candidate read. OAuth suppression, API-only model sets, BYOK, gateway
+bindings, and auxiliary calls cannot erase those facts. A non-OAuth call is
+permitted only when no compatible authorized pool exists, or every account in
+that pool has positive included-quota exhaustion evidence with an unexpired reset.
+Presented direct subscriptions require the same proof. Model compatibility is
+catalog-based; an unrelated provider's available subscription does not block an
+API-only model.
+
+An enrollment-read error, lease contention, refresh/auth failure, model denial,
+third-party refusal, generic 429, transport failure, or spent admission budget
+does not prove pool quota exhaustion. These failures rotate eligible included
+seats when possible, otherwise return an error without paid rescue. Generic 429s
+are cooldowns, not exhausted state. Rotation retains the original upstream error
+alongside the pool-unavailable classification. The guard is terminal within an
+executor operation even when its underlying cause would otherwise be retryable.
+
+Anthropic third-party refusals are classified narrowly per account and client
+app. The router does not infer that all non-Claude-Code clients are incompatible
+or forge provider attestation headers; a refusal cannot authorize paid rescue.
 
 Providers control extra usage through account settings and credits. Quota headers
 are observations, not an atomic included-only reservation: an unobserved Claude

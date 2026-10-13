@@ -186,6 +186,7 @@ const (
 	ModelIDGPT56Luna      ModelID = "gpt-5.6-luna"
 	ModelIDClaudeOpus48   ModelID = "claude-opus-4-8"
 	ModelIDGPT55          ModelID = "gpt-5.5"
+	ModelIDGemini31Pro    ModelID = "gemini-3.1-pro"
 )
 
 func (id ModelID) String() string {

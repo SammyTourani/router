@@ -3534,7 +3534,7 @@ func (s *Service) repinOffRefusingModel(ctx context.Context, sessionKey [session
 var anthropicPingFrame = []byte(sseEvent("ping", `{"type":"ping"}`))
 
 func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.ResponseWriter, r *http.Request) (returnErr error) {
-	ctx = WithManagedSubscriptionUsage(ctx)
+	ctx = s.withSubscriptionFundingAuthorization(ctx, r.Header)
 	switch gjson.GetBytes(body, "thread.type").String() {
 	case translate.MessageThreadContinue:
 		observability.FromContext(ctx).Info("Rejecting message-thread continue; client resends full history")
@@ -4678,6 +4678,7 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 	// Computed pre-dispatch so the primary dispatch defers its exhaustion flush.
 	baselineModel := s.baselineFor(feats.Model)
 	baselineCatalog, baselineKnown := catalog.ByID(baselineModel)
+	_, explicitRequestedModel := catalog.ByID(req.RequestedModel)
 	_, anthropicExcluded := s.excludedProvidersForRequest(ctx)[providers.ProviderAnthropic]
 	baselineAllowed := modelPermittedByAllowlist(ctx, baselineModel) &&
 		modelInRequestSubset(ctx, baselineModel)
@@ -5041,7 +5042,8 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 	// Keyed off the flush, not off whether an earlier rescue ran: a failed
 	// subscription retry keeps the same dark model, so a cluster peer can still
 	// serve — but only before the deferred error reaches the wire.
-	siblingRescueOwed := siblingViable && !baselineAttempted && !deferredErrFlushed
+	siblingRescueOwed := siblingViable && !baselineAttempted && !deferredErrFlushed &&
+		!(explicitRequestedModel && isSubscriptionPoolError(proxyErr))
 	if siblingRescueOwed && proxyErr != nil && !preludeBuf.Committed() &&
 		(providers.IsRetryable(proxyErr) ||
 			providers.IsUpstreamModelNotFound(proxyErr) ||
@@ -6746,7 +6748,7 @@ const (
 // ProxyOpenAIChatCompletion routes an OpenAI Chat Completion request,
 // translating cross-format when the decision picks a non-OpenAI provider.
 func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w http.ResponseWriter, r *http.Request) (returnErr error) {
-	ctx = WithManagedSubscriptionUsage(ctx)
+	ctx = s.withSubscriptionFundingAuthorization(ctx, r.Header)
 	ctx, returnErr = s.withClassifierInput(ctx, body, router.EndpointOpenAIChat)
 	if returnErr != nil {
 		return returnErr
@@ -7821,6 +7823,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 	// classifier. Resolved pre-dispatch: the refusal gate must be armed before
 	// the first upstream byte, and the primary dispatch has to hold its
 	// exhaustion flush so the refusal envelope can still be swallowed.
+	_, explicitRequestedModel := catalog.ByID(routeRequest.RequestedModel)
 	cyberRetryEligible := s.ResolveCyberRefusalRetry(ctx) &&
 		!routeRes.CallerModelPassthrough &&
 		decision.Provider == providers.ProviderOpenAI &&
@@ -8157,7 +8160,8 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 	siblingRescueRan := false
 	var rescuedPrimary router.Decision
 	var rescuedPrimaryErr error
-	siblingRescueOwed := siblingViable && !deferredErrFlushed
+	siblingRescueOwed := siblingViable && !deferredErrFlushed &&
+		!(explicitRequestedModel && isSubscriptionPoolError(proxyErr))
 	if siblingRescueOwed && proxyErr != nil && !preludeBuf.Committed() &&
 		(providers.IsRetryable(proxyErr) ||
 			providers.IsUpstreamModelNotFound(proxyErr) ||

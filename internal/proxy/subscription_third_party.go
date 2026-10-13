@@ -31,8 +31,8 @@ func markSubscriptionClientAppRefused(ctx context.Context) {
 }
 
 // forcedClaudeClientAppRefused reports whether a paid attempt would only stand
-// in for subscriptions that refused this client app on a forced model. A
-// routed turn keeps its paid rescue; a forced one is the user's explicit pick.
+// in for subscriptions that refused this client app on a forced model. Routed
+// turns additionally require independent pool-wide funding authorization.
 func forcedClaudeClientAppRefused(ctx context.Context, decision router.Decision, creds *Credentials) bool {
 	if creds != nil && (creds.OAuth || creds.Source == credSourceBYOK) {
 		return false

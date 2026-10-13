@@ -113,12 +113,10 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 			activeModels = append(activeModels, model)
 		}
 	}
-	rotationBudget, cancel := context.WithTimeout(ctx, subscriptionRotationBudget)
-	defer cancel()
-	ctx = context.WithValue(ctx, subscriptionRotationBudgetKey{}, rotationBudget)
+	ctx, rotationBudget := withSubscriptionAdmissionBudget(ctx)
 	hasFixedTarget := request.ForceModel != "" || callerModelPassthroughActive(ctx) ||
 		in.origin == policy.OverrideSourceDeployment || in.origin == policy.OverrideSourceRequest
-	for len(activeModels) > 0 && rotationBudget.Err() == nil {
+	for len(activeModels) > 0 && rotationBudget.remaining > 0 {
 		attemptCtx, attemptReq := s.subscriptionStateRequest(ctx, request, activeModels)
 		attemptCtx = context.WithValue(attemptCtx, subscriptionOnlyAttemptKey{}, true)
 		attemptReq.EnabledProviders = make(map[string]struct{})
@@ -185,9 +183,6 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 	paidCtx, paidReq := s.subscriptionStateRequest(ctx, request, paidModels)
 	paidCtx = billing.ReleaseLinkedFirst(paidCtx)
 	paidCtx = context.WithValue(paidCtx, subscriptionAPIOnlyKey{}, true)
-	if subscriptionRotationExpired(ctx, rotationBudget) {
-		paidCtx = context.WithValue(paidCtx, subscriptionRotationBudgetDisabledKey{}, true)
-	}
 	paidCtx = withSuppressedClaudeSubscription(withSuppressedCodexSubscription(paidCtx))
 	target := in.initialDecision
 	for {
@@ -213,10 +208,6 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 	}
 	observability.FromContext(ctx).Info("Included subscription targets unavailable; using exhausted model set", "model", target.Model, "provider", target.Provider)
 	return s.dispatchSubscriptionStateTarget(paidCtx, in, target, false)
-}
-
-func subscriptionRotationExpired(ctx, rotationBudget context.Context) bool {
-	return ctx.Err() == nil && rotationBudget.Err() != nil
 }
 
 func (s *Service) subscriptionStatePaidTargetAvailable(ctx context.Context, headers http.Header, target router.Decision) bool {

@@ -93,7 +93,7 @@ func dispatchManagedThirdPartyTurnWithReason(t *testing.T, svc *Service, ctx con
 	return recorder, err
 }
 
-func TestDispatchWithFallbackRecoversManagedThirdPartyRefusal(t *testing.T) {
+func TestDispatchWithFallbackDoesNotPayForManagedThirdPartyRefusal(t *testing.T) {
 	leaser := &scriptedSubscriptionLeaser{
 		leases:     []subscriptions.Lease{{AccountID: "opaque-a", AccessToken: "token-a"}},
 		repeatLast: true,
@@ -106,12 +106,12 @@ func TestDispatchWithFallbackRecoversManagedThirdPartyRefusal(t *testing.T) {
 
 	for range 2 {
 		recorder, err := dispatchManagedThirdPartyTurn(t, svc, clientAppContext(managedSubscriptionTestContext(), ClientAppOpencode))
-		require.NoError(t, err)
-		assert.Equal(t, "served", recorder.Body.String())
+		require.Error(t, err)
+		assert.NotEqual(t, "served", recorder.Body.String())
 	}
 
 	assert.Equal(t, 1, upstream.subDispatches, "the refused account is skipped for this client app on later turns")
-	assert.Equal(t, 2, upstream.paidDispatches)
+	assert.Zero(t, upstream.paidDispatches, "a client-specific refusal does not prove the account quota is exhausted")
 	assert.Empty(t, leaser.disabledIDs, "a third-party refusal must not mark the account as needing reconnect")
 	assert.Empty(t, leaser.cooldownIDs, "a third-party refusal must not cool the account down for every client")
 }
@@ -128,7 +128,7 @@ func TestDispatchWithFallbackKeepsManagedThirdPartyRefusalClientSpecific(t *test
 	svc.retrySleep = noopSleep
 
 	_, err := dispatchManagedThirdPartyTurn(t, svc, clientAppContext(managedSubscriptionTestContext(), ClientAppOpencode))
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.Equal(t, 1, upstream.subDispatches)
 
 	upstream.subErr = nil
@@ -137,6 +137,7 @@ func TestDispatchWithFallbackKeepsManagedThirdPartyRefusalClientSpecific(t *test
 	require.NoError(t, err)
 	assert.Equal(t, "served", recorder.Body.String())
 	assert.Equal(t, 2, upstream.subDispatches, "Claude Code still leases the account OpenCode was refused on")
+	assert.Zero(t, upstream.paidDispatches)
 	assert.True(t, servedOnSubscription(claudeCodeCtx))
 }
 
@@ -157,24 +158,22 @@ func TestDispatchWithFallbackSurfacesManagedThirdPartyRefusalWithoutFallbackKey(
 	assert.Zero(t, upstream.paidDispatches, "no paid credential exists to fail over to")
 }
 
-func TestSubscriptionThirdPartyRefusalRescuesInboundSubscription(t *testing.T) {
+func TestSubscriptionThirdPartyRefusalDoesNotPayForInboundSubscription(t *testing.T) {
 	in := parityAnthropicIngress()
 	for _, stream := range []bool{false, true} {
 		t.Run(boolLit(stream), func(t *testing.T) {
 			upstream := &parityUpstream{subErr: thirdPartyRefusalError(), okBody: in.upstreamOK(stream)}
 			svc := in.parityService(upstream)
 			rec, req, body := in.request(t, stream)
-			require.NoError(t, in.call(svc, in.subCtx(), body, rec, req))
-			assert.Equal(t, http.StatusOK, rec.Code)
-			assert.NotContains(t, rec.Body.String(), "Third-party apps")
-			assert.Contains(t, rec.Body.String(), "output_tokens")
+			require.Error(t, in.call(svc, in.subCtx(), body, rec, req))
+			assert.NotContains(t, rec.Body.String(), "output_tokens")
 			assert.Equal(t, 1, upstream.subDispatches)
-			assert.Equal(t, 1, upstream.paidDispatches)
+			assert.Zero(t, upstream.paidDispatches)
 		})
 	}
 }
 
-func TestSubscriptionThirdPartyRefusalRescuesOpenAIIngress(t *testing.T) {
+func TestSubscriptionThirdPartyRefusalDoesNotPayForOpenAIIngress(t *testing.T) {
 	in := parityAnthropicIngress()
 	upstream := &parityUpstream{subErr: thirdPartyRefusalError(), okBody: in.upstreamOK(false)}
 	svc := in.parityService(upstream)
@@ -182,12 +181,10 @@ func TestSubscriptionThirdPartyRefusalRescuesOpenAIIngress(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
 
-	require.NoError(t, svc.ProxyOpenAIChatCompletion(in.subCtx(), body, recorder, request))
+	require.Error(t, svc.ProxyOpenAIChatCompletion(in.subCtx(), body, recorder, request))
 
-	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.NotContains(t, recorder.Body.String(), "Third-party apps")
 	assert.Equal(t, 1, upstream.subDispatches)
-	assert.Equal(t, 1, upstream.paidDispatches)
+	assert.Zero(t, upstream.paidDispatches)
 }
 
 func TestDispatchWithFallbackRejectsPaidFallbackForForcedThirdPartyRefusal(t *testing.T) {
