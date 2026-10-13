@@ -164,6 +164,7 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 			return winner, err
 		}
 		observability.FromContext(ctx).Info("Subscription model unavailable; selecting another included target", "model", target.Model, "provider", target.Provider)
+		recordTurnFailure(ctx, target.Model)
 		remainingModels := activeModels[:0]
 		for _, model := range activeModels {
 			if model != target.Model {

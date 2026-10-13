@@ -110,6 +110,10 @@ type Pin struct {
 	// a rescued upstream rate limit is throttling, not a dead arm. A model
 	// present in DemotedModels is out regardless of any cooldown here.
 	DemotionCooldowns map[string]time.Time
+	// TurnStrikes are models that failed and were rescued during the current
+	// agent turn (see TurnStrikeStore). They stay out of the session until the
+	// next real user prompt clears them.
+	TurnStrikes []string
 }
 
 // DemotionReason names why a model was withdrawn from automatic selection for
@@ -231,6 +235,17 @@ type CooldownStore interface {
 	// (overwriting an earlier cooldown for the same model) instead of
 	// appending it to DemotedModels. Same seeding and strategy guard.
 	ExpireAndCoolDownModel(ctx context.Context, expired Pin, model string, until time.Time, reason DemotionReason) error
+}
+
+// TurnStrikeStore keeps a rescued model out of a session for the rest of the
+// agent turn. It is a separate contract so a Store without it keeps satisfying
+// Store; callers skip the strike when the store does not implement it.
+type TurnStrikeStore interface {
+	// StrikeTurnModel adds model to an existing row's TurnStrikes (deduped).
+	StrikeTurnModel(ctx context.Context, sessionKey [SessionKeyLen]byte, role, model string) error
+	// ClearTurnStrikes empties the row's TurnStrikes when a new user prompt
+	// starts the next agent turn.
+	ClearTurnStrikes(ctx context.Context, sessionKey [SessionKeyLen]byte, role string) error
 }
 
 // RecoveryProbeStore atomically admits one half-open request for a session/model

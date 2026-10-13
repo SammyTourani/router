@@ -114,6 +114,7 @@ func TestSubscriptionStateModelsFundingOrder(t *testing.T) {
 				paidModels = nil
 			}
 			ctx = context.WithValue(ctx, InstallationSubscriptionModelsWhenInactiveContextKey{}, paidModels)
+			ctx = withTurnFailures(ctx)
 			if scenario.demoteClaude {
 				ctx = context.WithValue(ctx, SessionDemotedModelsContextKey{}, []string{stateClaudeModel})
 			}
@@ -194,6 +195,7 @@ func TestSubscriptionStateModelsFundingOrder(t *testing.T) {
 			}
 			if scenario.liveReject && !scenario.wantErr {
 				require.Equal(t, []string{stateClaudeModel, scenario.want}, servedModels)
+				require.Contains(t, turnFailuresFromContext(ctx).models, stateClaudeModel, "the rescued model is struck for the agent turn")
 			}
 		})
 	}
