@@ -36,11 +36,11 @@ pull_request=$(gh api "repos/$repository/commits/$commit/pulls" \
 IFS=$'\t' read -r pull_number head_sha head_repository <<<"$pull_request"
 [[ $head_repository == "$repository" ]] || reject "pull request #$pull_number comes from $head_repository"
 
-run=$(gh api "repos/$repository/actions/workflows/test.yml/runs?event=pull_request&head_sha=$head_sha&per_page=100" \
+test_run=$(gh api "repos/$repository/actions/workflows/test.yml/runs?event=pull_request&head_sha=$head_sha&per_page=100" \
 	--jq "[.workflow_runs[] | select(.head_repository.full_name == \"$repository\")] | max_by(.run_number) // empty | [.id, .status, .conclusion] | @tsv") ||
 	reject "Test run lookup failed"
-[[ -n $run ]] || reject "pull request #$pull_number has no Test run for $head_sha"
-IFS=$'\t' read -r run_id run_status run_conclusion <<<"$run"
+[[ -n $test_run ]] || reject "pull request #$pull_number has no Test run for $head_sha"
+IFS=$'\t' read -r run_id run_status run_conclusion <<<"$test_run"
 [[ $run_status == completed && $run_conclusion == success ]] ||
 	reject "latest Test run $run_id for #$pull_number is $run_status/$run_conclusion"
 
