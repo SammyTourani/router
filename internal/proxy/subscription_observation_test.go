@@ -75,7 +75,7 @@ func TestClaudeOverageAuthorizesDeploymentKey(t *testing.T) {
 	service := ingress.parityService(upstream)
 	observer := usage.NewObserver([]byte("salt"), 10*time.Minute, time.Now)
 	service.WithUsageObserver(observer)
-	observer.Record(observer.Key([]byte(ingress.token)), usage.Snapshot{OverageInUse: true})
+	observer.Record(observer.Key([]byte(ingress.token)), usage.Snapshot{OverageInUse: true, UnifiedResetAt: time.Now().Add(time.Hour)})
 
 	recorder, request, body := ingress.request(t, false)
 	require.NoError(t, ingress.call(service, ingress.subCtx(), body, recorder, request))

@@ -159,8 +159,8 @@ func (s *Service) managedAccountQuotaExhausted(ctx context.Context, candidate ma
 	return false
 }
 
-// includedQuotaSpent treats observed paid overage as spent included quota: the
-// subscription is already billing extra usage, so paid API inference may serve.
+// includedQuotaSpent treats observed paid overage as spent included quota until
+// the reported plan reset. Undated overage never authorizes paid inference.
 func includedQuotaSpent(snapshot usage.Snapshot, now time.Time) bool {
-	return snapshot.OverageInUse || snapshot.ExhaustedAsOf(now)
+	return (snapshot.OverageInUse && snapshot.UnifiedResetAt.After(now)) || snapshot.ExhaustedAsOf(now)
 }
