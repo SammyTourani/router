@@ -277,3 +277,36 @@ func TestSubscriptionFundingExpiredShortWindowCannotAuthorizeAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestSubscriptionFundingPaidOverageIsQuotaProof(t *testing.T) {
+	upstream := &fakeClient{name: providers.ProviderAnthropic, outcomes: []fakeOutcome{{writeBytes: []byte("paid answer")}}}
+	now := time.Unix(1_800_000_000, 0)
+	observer := usage.NewObserver([]byte("synthetic-salt"), 24*time.Hour, func() time.Time { return now })
+	observer.Record(observer.Key([]byte("subscription-account:seat")), usage.Snapshot{OverageInUse: true, UnifiedResetAt: now.Add(time.Hour)})
+	svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderAnthropic: upstream}).
+		WithManagedSubscriptions(&scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "seat", AccessToken: "oauth-token"}}}).
+		WithUsageObserver(observer).
+		WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}})
+	svc.now = func() time.Time { return now }
+	ctx := WithManagedSubscriptionCandidates(context.Background(), []*auth.SubscriptionAccount{{ID: "seat", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive}})
+	rec := httptest.NewRecorder()
+	buf := newPreludeBuffer(rec)
+	in := plannedInputs(rec, buf, []catalog.ProviderBinding{{Provider: providers.ProviderAnthropic}}, nil)
+	in.initialDecision = router.Decision{Provider: providers.ProviderAnthropic, Model: catalog.ModelIDClaudeOpus48.String()}
+	_, err := svc.dispatchWithFallback(ctx, in)
+	require.NoError(t, err)
+	require.Equal(t, 1, upstream.calls)
+	require.Equal(t, "paid answer", rec.Body.String())
+}
+
+func TestSubscriptionFundingDirectTokenOverageIsQuotaProof(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	observer := usage.NewObserver([]byte("synthetic-salt"), 24*time.Hour, func() time.Time { return now })
+	observer.Record(observer.Key([]byte("synthetic-direct-token")), usage.Snapshot{OverageInUse: true, UnifiedResetAt: now.Add(time.Hour)})
+	svc := newServiceWithProviders(t, nil).WithUsageObserver(observer)
+	svc.now = func() time.Time { return now }
+	require.NoError(t, svc.authorizeSubscriptionAPI(context.Background(), subscriptions.ProviderClaude, "", "synthetic-direct-token", clientAppRefusalFunding{}))
+	now = now.Add(2 * time.Hour)
+	require.ErrorIs(t, svc.authorizeSubscriptionAPI(context.Background(), subscriptions.ProviderClaude, "", "synthetic-direct-token", clientAppRefusalFunding{}), ErrSubscriptionPoolUnavailable,
+		"overage past the plan reset is not current quota proof")
+}

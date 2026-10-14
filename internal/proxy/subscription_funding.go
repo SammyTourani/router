@@ -11,6 +11,7 @@ import (
 	"weave-os/router/internal/inference"
 	"weave-os/router/internal/observability"
 	"weave-os/router/internal/providers"
+	"weave-os/router/internal/proxy/usage"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router/catalog"
 	"weave-os/router/internal/subscriptions"
@@ -133,7 +134,7 @@ func (s *Service) authorizeSubscriptionAPI(ctx context.Context, pool subscriptio
 			return nil
 		}
 		if s.usageObserver != nil {
-			if snapshot, observed := s.usageObserver.Snapshot(s.usageObserver.Key([]byte(token))); observed && snapshot.ExhaustedAsOf(now) {
+			if snapshot, observed := s.usageObserver.Snapshot(s.usageObserver.Key([]byte(token))); observed && includedQuotaSpent(snapshot, now) {
 				return nil
 			}
 		}
@@ -153,7 +154,13 @@ func (s *Service) managedAccountQuotaExhausted(ctx context.Context, candidate ma
 	}
 	if s.usageObserver != nil {
 		snapshot, observed := s.usageObserver.Snapshot(s.usageObserver.Key([]byte("subscription-account:" + candidate.accountID)))
-		return observed && snapshot.ExhaustedAsOf(now)
+		return observed && includedQuotaSpent(snapshot, now)
 	}
 	return false
+}
+
+// includedQuotaSpent treats observed paid overage as spent included quota: the
+// subscription is already billing extra usage, so paid API inference may serve.
+func includedQuotaSpent(snapshot usage.Snapshot, now time.Time) bool {
+	return snapshot.OverageInUse || snapshot.ExhaustedAsOf(now)
 }
