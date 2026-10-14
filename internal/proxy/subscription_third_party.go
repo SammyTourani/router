@@ -53,6 +53,19 @@ func clientAppRefusalPaidFallback(ctx context.Context) bool {
 	return allowed
 }
 
+// claudePoolRefusesClientApp reports whether an opted-in forced turn already
+// saw a Claude seat refuse its client app. Anthropic applies that refusal to
+// every subscription's plan limits, so any other seat could serve the app only
+// from its holder's extra usage, which the router never spends: the whole Claude
+// pool is unusable for the turn, including seats it never leased.
+func claudePoolRefusesClientApp(ctx context.Context) bool {
+	if !clientAppRefusalPaidFallback(ctx) {
+		return false
+	}
+	usage, _ := ctx.Value(ManagedSubscriptionUsageContextKey{}).(*ManagedSubscriptionUsage)
+	return usage != nil && usage.ClientAppRefused
+}
+
 // forcedClaudeClientAppRefused reports whether a paid attempt would only stand
 // in for subscriptions that refused this client app on a forced model. Routed
 // turns additionally require independent pool-wide funding authorization.

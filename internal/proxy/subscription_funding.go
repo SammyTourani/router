@@ -77,7 +77,7 @@ func (s *Service) withSubscriptionFundingAuthorization(ctx context.Context, head
 		if !compatible {
 			return nil
 		}
-		refusal := clientAppRefusalFunding{counts: clientAppRefusalPaidFallback(callCtx), clientApp: ClientIdentityFrom(callCtx).ClientApp}
+		refusal := clientAppRefusalFunding{counts: clientAppRefusalPaidFallback(callCtx), poolRefused: claudePoolRefusesClientApp(callCtx), clientApp: ClientIdentityFrom(callCtx).ClientApp}
 		if err := s.authorizeSubscriptionAPI(admissionCtx, pool, codexToken, claudeToken, refusal); err != nil {
 			observability.FromContext(callCtx).Warn("Blocked API inference without subscription quota-exhaustion evidence", "model", target.CatalogID, "provider", target.Provider, "subscription_provider", pool, "err", err)
 			return err
@@ -92,11 +92,13 @@ func (s *Service) subscriptionAPIAuthorization(ctx context.Context, provider, mo
 }
 
 // clientAppRefusalFunding lets a Claude seat that refused clientApp count as
-// spent. Only a key's paid-fallback opt-in on a forced turn sets counts; an
+// spent. Only a key's paid-fallback opt-in on a forced turn sets counts, and
+// poolRefused extends it to every Claude seat once the turn saw a refusal; an
 // unrecognized client legitimately has an empty clientApp.
 type clientAppRefusalFunding struct {
-	counts    bool
-	clientApp string
+	counts      bool
+	poolRefused bool
+	clientApp   string
 }
 
 func (s *Service) authorizeSubscriptionAPI(ctx context.Context, pool subscriptions.Provider, codexToken, claudeToken string, refusal clientAppRefusalFunding) error {
@@ -113,7 +115,7 @@ func (s *Service) authorizeSubscriptionAPI(ctx context.Context, pool subscriptio
 		if s.managedAccountQuotaExhausted(ctx, candidate, now) {
 			continue
 		}
-		if refusal.counts && pool == subscriptions.ProviderClaude && s.subscriptionModels.managedClientAppDenied(candidate.accountID, providers.ProviderAnthropic, refusal.clientApp, now) {
+		if refusal.counts && pool == subscriptions.ProviderClaude && (refusal.poolRefused || s.subscriptionModels.managedClientAppDenied(candidate.accountID, providers.ProviderAnthropic, refusal.clientApp, now)) {
 			continue
 		}
 		return fmt.Errorf("%w: included quota is available or unknown", ErrSubscriptionPoolUnavailable)

@@ -86,8 +86,11 @@ A forced Claude turn whose seats all refused the client app fails with 403.
 
 The one exception is an admin opt-in on a single router key. A key with
 `paid_fallback_on_subscription_refusal` set serves those forced turns on paid
-API capacity: a seat that refused the turn's client app counts as spent, beside
-seats with exhaustion evidence. Routed turns and every other failure keep the
+API capacity. Anthropic's refusal applies to every subscription's plan limits,
+so once any Claude seat refuses the turn's client app, the whole Claude pool,
+shared seats included, counts as spent. The router leases no further seats, so a
+colleague's extra usage is never spent, and seats it never leased cannot block
+the paid attempt. Routed turns and every other failure keep the
 rules above, and no request header can opt in. There is no admin API for the
 flag; an operator sets it directly and it takes effect within the five-minute
 API-key cache TTL:

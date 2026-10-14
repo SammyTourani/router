@@ -359,3 +359,89 @@ func TestForcedThirdPartyRefusalPaysThroughSubscriptionStateModelsOnlyWhenKeyCon
 		})
 	}
 }
+
+// sharedPoolRefusalContext admits the requester's own seat and a shared
+// colleague seat, so paid authorization judges a pool larger than the seats a
+// turn actually leases.
+func sharedPoolRefusalContext(paidFallbackConsented bool) context.Context {
+	ctx := WithManagedSubscriptionCandidates(managedSubscriptionTestContext(), []*auth.SubscriptionAccount{
+		{ID: "opaque-a", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive},
+		{ID: "opaque-shared", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive},
+	})
+	if paidFallbackConsented {
+		ctx = context.WithValue(ctx, APIKeyPaidFallbackOnSubscriptionRefusalContextKey{}, true)
+	}
+	return clientAppContext(ctx, ClientAppOpencode)
+}
+
+func newSharedPoolRefusalService(t *testing.T, leases ...subscriptions.Lease) (*Service, *parityUpstream, *scriptedSubscriptionLeaser) {
+	t.Helper()
+	leaser := &scriptedSubscriptionLeaser{leases: leases}
+	upstream := &parityUpstream{subErr: thirdPartyRefusalError(), okBody: "served"}
+	svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderAnthropic: upstream}).
+		WithManagedSubscriptions(leaser).
+		WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}})
+	svc.retrySleep = noopSleep
+	return svc, upstream, leaser
+}
+
+func TestForcedThirdPartyRefusalConsentSpendsWholeClaudePool(t *testing.T) {
+	ownSeat := subscriptions.Lease{AccountID: "opaque-a", AccessToken: "token-a"}
+	sharedSeat := subscriptions.Lease{AccountID: "opaque-shared", AccessToken: "token-shared"}
+
+	t.Run("an unleasable shared seat with unknown quota does not block paid capacity", func(t *testing.T) {
+		svc, upstream, _ := newSharedPoolRefusalService(t, ownSeat)
+
+		recorder, err := dispatchManagedThirdPartyTurnWithReason(t, svc, sharedPoolRefusalContext(true), translate.ReasonUserForceModel)
+
+		require.NoError(t, err)
+		assert.Equal(t, "served", recorder.Body.String())
+		assert.Equal(t, 1, upstream.subDispatches)
+		assert.Equal(t, 1, upstream.paidDispatches)
+	})
+
+	t.Run("a later turn skipping the denied seat is served on paid capacity", func(t *testing.T) {
+		svc, upstream, _ := newSharedPoolRefusalService(t, ownSeat)
+		_, err := dispatchManagedThirdPartyTurnWithReason(t, svc, sharedPoolRefusalContext(true), translate.ReasonUserForceModel)
+		require.NoError(t, err)
+		svc.managedSubscriptions = &scriptedSubscriptionLeaser{leases: []subscriptions.Lease{ownSeat}}
+
+		recorder, err := dispatchManagedThirdPartyTurnWithReason(t, svc, sharedPoolRefusalContext(true), translate.ReasonUserForceModel)
+
+		require.NoError(t, err)
+		assert.Equal(t, "served", recorder.Body.String())
+		assert.Equal(t, 1, upstream.subDispatches, "the denied seat is skipped without a probe")
+		assert.Equal(t, 2, upstream.paidDispatches)
+	})
+
+	t.Run("shared seats are not probed once the client app was refused", func(t *testing.T) {
+		svc, upstream, leaser := newSharedPoolRefusalService(t, ownSeat, sharedSeat)
+
+		recorder, err := dispatchManagedThirdPartyTurnWithReason(t, svc, sharedPoolRefusalContext(true), translate.ReasonUserForceModel)
+
+		require.NoError(t, err)
+		assert.Equal(t, "served", recorder.Body.String())
+		assert.Equal(t, 1, upstream.subDispatches, "a colleague's seat could serve the app only from their extra usage")
+		assert.Equal(t, 1, leaser.next)
+		assert.Equal(t, 1, upstream.paidDispatches)
+	})
+
+	t.Run("key without consent still fails the forced turn", func(t *testing.T) {
+		svc, upstream, _ := newSharedPoolRefusalService(t, ownSeat)
+
+		_, err := dispatchManagedThirdPartyTurnWithReason(t, svc, sharedPoolRefusalContext(false), translate.ReasonUserForceModel)
+
+		require.ErrorIs(t, err, ErrSubscriptionClientAppRefused)
+		assert.Equal(t, 1, upstream.subDispatches)
+		assert.Zero(t, upstream.paidDispatches)
+	})
+
+	t.Run("consent does not fund routed turns", func(t *testing.T) {
+		svc, upstream, _ := newSharedPoolRefusalService(t, ownSeat)
+
+		_, err := dispatchManagedThirdPartyTurn(t, svc, sharedPoolRefusalContext(true))
+
+		require.Error(t, err)
+		assert.Zero(t, upstream.paidDispatches)
+	})
+}

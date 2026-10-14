@@ -242,6 +242,9 @@ func (s *Service) leaseManagedSubscription(ctx context.Context, provider, model 
 		return ctx, subscriptions.Lease{}, true, ErrSubscriptionPoolExhausted
 	}
 	for {
+		if poolProvider == subscriptions.ProviderClaude && claudePoolRefusesClientApp(ctx) {
+			return poolSpent()
+		}
 		lease, present, err := s.managedSubscriptions.Lease(ctx, owner, poolProvider, ClientIdentityFrom(ctx).SessionID)
 		if err != nil && !errors.Is(err, subscriptions.ErrNoAvailableAccount) {
 			if !unadmitted && !subscriptionAttemptOnly(ctx) && !paidFallbackForbidden(ctx) && s.managedProviderFallbackAvailable(ctx, poolProvider) && s.subscriptionAPIAuthorization(ctx, provider, model) == nil {
