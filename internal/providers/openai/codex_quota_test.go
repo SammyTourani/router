@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -166,4 +167,18 @@ func TestCodexQuotaEndpointUnavailableNeverInfers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCodexReachedTypeKeepsWindowReset(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"plan_type":"plus","rate_limit":{"allowed":false,"limit_reached":true,"primary_window":{"used_percent":40},"secondary_window":{"used_percent":100,"reset_at":1792600000}},"rate_limit_reached_type":{"type":"rate_limit_reached"}}`)
+	}))
+	defer server.Close()
+	client := NewClient("deployment-key", server.URL)
+	client.SetCodexBaseURL(server.URL)
+	err := client.checkCodexIncludedQuota(codexCtx("test-token", "test-account"), "gpt-6.1-sol")
+	var upstream *providers.UpstreamErrorResponse
+	require.True(t, errors.As(err, &upstream))
+	require.Equal(t, http.StatusTooManyRequests, upstream.Status)
+	require.Contains(t, string(upstream.Body), "1792600000")
 }

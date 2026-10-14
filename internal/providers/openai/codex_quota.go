@@ -86,14 +86,16 @@ func (c *Client) checkCodexIncludedQuota(ctx context.Context, model string) erro
 	// Usage-based and workspace plans report a plan without windowed limits;
 	// their exhaustion arrives as spend_control or rate_limit_reached_type.
 	planReported := quotaStatus.PlanType != ""
-	if (quotaStatus.SpendControl != nil && quotaStatus.SpendControl.Reached) ||
-		(quotaStatus.RateLimitReachedType != nil && codexReachedTypes[quotaStatus.RateLimitReachedType.Type]) {
-		log.Debug("Codex workspace limit preflight denied inference", "plan_type", quotaStatus.PlanType)
-		return codexQuotaExhausted(0)
-	}
-	if err = validateCodexIncludedQuota(quotaStatus.RateLimit, planReported); err != nil {
+	limitReached := (quotaStatus.SpendControl != nil && quotaStatus.SpendControl.Reached) ||
+		(quotaStatus.RateLimitReachedType != nil && codexReachedTypes[quotaStatus.RateLimitReachedType.Type])
+	// Windows go first so an exhausted window keeps its reset time.
+	if err = validateCodexIncludedQuota(quotaStatus.RateLimit, planReported || limitReached); err != nil {
 		logCodexQuotaDenial(log, err, "plan_type", quotaStatus.PlanType, "has_rate_limit", quotaStatus.RateLimit != nil)
 		return err
+	}
+	if limitReached {
+		log.Info("Codex workspace limit preflight denied inference", "plan_type", quotaStatus.PlanType)
+		return codexQuotaExhausted(0)
 	}
 	for _, modelRateLimit := range quotaStatus.AdditionalRateLimits {
 		if modelRateLimit.Model == model {
