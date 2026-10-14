@@ -170,7 +170,17 @@ The aggregate `Test` job accepts `skipped` for `Go checks` only when the
 classifier reported `go=false`; a skip for any other reason, a cancellation or
 a failure still fails the required check, so the pin check in WorkWeave keeps
 the same contract. Push, merge and `workflow_dispatch` runs have no base SHA
-and therefore run everything.
+and therefore run everything, with one exception below.
+
+A main push reuses the Go checks of the pull request it squash-merged instead
+of rerunning them (~6 min) when
+[`scripts/go_ci_evidence.sh`](../scripts/go_ci_evidence.sh) finds that the
+pull request's latest same-repository `Test` run succeeded with `Go checks`
+run, and that its `go-checks-evidence` artifact records the pushed commit's
+tree and first-parent tree. Equal trees mean the run tested the same files,
+including this workflow, on the same base the legacy runtime check builds.
+Any other outcome, including an API failure, runs the Go checks. If main moved
+after the pull request's last run, the parent tree differs and they rerun.
 
 ## Measuring future changes
 

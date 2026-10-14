@@ -21,12 +21,17 @@ jobs:
     name: Classify changed paths
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     outputs:
       statusline: ${{ steps.filter.outputs.statusline }}
       installer: ${{ steps.filter.outputs.installer }}
       hmm: ${{ steps.filter.outputs.hmm }}
       task-domain: ${{ steps.filter.outputs.task-domain }}
-      go: ${{ steps.go-relevance.outputs.go_changed }}
+      go: ${{ steps.go-evidence.outputs.go_evidence_reused == 'true' && 'false' || steps.go-relevance.outputs.go_changed }}
+      go-evidence-reused: ${{ steps.go-evidence.outputs.go_evidence_reused == 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -71,6 +76,15 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: scripts/go_ci_relevance.sh changed "$BASE_SHA" "$HEAD_SHA" >>"$GITHUB_OUTPUT"
+
+      # A squash merge whose tree and parent tree match the merged pull
+      # request's tested merge commit reuses that run's Go checks.
+      - name: Reuse merged pull request Go checks
+        id: go-evidence
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/go_ci_evidence.sh reuse "$GITHUB_REPOSITORY" "$GITHUB_SHA" >>"$GITHUB_OUTPUT"
 
   inference-boundary:
     name: Inference boundary
@@ -124,6 +138,9 @@ jobs:
 
       - name: Test the Go CI relevance classifier
         run: bash scripts/go_ci_relevance_test.sh
+
+      - name: Test the Go CI evidence reuse check
+        run: bash scripts/go_ci_evidence_test.sh
 
       - name: Install golang-migrate
         run: |
@@ -281,6 +298,24 @@ jobs:
             ROUTER_ONNX_ASSETS_DIR="$native_fixture/assets" \
             ROUTER_ONNX_LIBRARY_DIR="$native_fixture/native/lib" \
             go run ./scripts/legacy_runtime_check
+
+      # Records what this successful run tested so the squash merge's main
+      # push can reuse it; see scripts/go_ci_evidence.sh.
+      - name: Record tested Go checks tree
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/go-checks-evidence"
+          printf 'tree %s\nparent_tree %s\n' "$(git rev-parse 'HEAD^{tree}')" "$(git rev-parse 'HEAD^1^{tree}')" \
+            >"$RUNNER_TEMP/go-checks-evidence/evidence"
+
+      - name: Upload tested Go checks tree
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-checks-evidence
+          path: ${{ runner.temp }}/go-checks-evidence/evidence
+          if-no-files-found: error
+          retention-days: 30
 
   # Separate job: needs no Go toolchain, Postgres, or network. The statusline is
   # shipped to users as a standalone script, so a regression there is invisible
@@ -488,6 +523,7 @@ jobs:
           HMM_SIDECAR_NEEDED: ${{ needs.changed-paths.outputs.hmm }}
           TASK_DOMAIN_NEEDED: ${{ needs.changed-paths.outputs.task-domain }}
           GO_CHECKS_NEEDED: ${{ needs.changed-paths.outputs.go }}
+          GO_EVIDENCE_REUSED: ${{ needs.changed-paths.outputs.go-evidence-reused }}
         run: |
           printf '%s\n' \
             "Changed paths: $CHANGED_PATHS_RESULT" \
@@ -502,7 +538,8 @@ jobs:
             "Installer needed: $INSTALLER_NEEDED" \
             "HMM sidecar needed: $HMM_SIDECAR_NEEDED" \
             "Task domain needed: $TASK_DOMAIN_NEEDED" \
-            "Go checks needed: $GO_CHECKS_NEEDED"
+            "Go checks needed: $GO_CHECKS_NEEDED" \
+            "Go checks reused from merged pull request: $GO_EVIDENCE_REUSED"
 
           if [ "$CHANGED_PATHS_RESULT" != success ] || \
              [ "$INFERENCE_BOUNDARY_RESULT" != success ]; then
