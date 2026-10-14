@@ -437,6 +437,17 @@ router_status="$(HOME="$home" PATH="$test_path" NO_COLOR=1 \
 printf '%s' "$router_status" | grep -q 'Codex: points at Router' \
   || fail "status did not detect a Codex install whose markers Codex had dropped"
 
+# `off` comments out model_provider but keeps the provider table, so status
+# must report the toggle state rather than the table's endpoint.
+HOME="$home" PATH="$test_path" NO_COLOR=1 bash "$installer" off --codex --scope user >/dev/null 2>&1
+router_status="$(HOME="$home" PATH="$test_path" NO_COLOR=1 \
+  bash "$installer" status --codex --scope user 2>&1 || true)"
+printf '%s' "$router_status" | grep -q 'Codex: points at Router' \
+  && fail "status reported Codex on the router after off --codex"
+printf '%s' "$router_status" | grep -q 'Codex: off' \
+  || fail "status did not report Codex as off after off --codex"
+HOME="$home" PATH="$test_path" NO_COLOR=1 bash "$installer" on --codex --scope user >/dev/null 2>&1
+
 # `login codex` is where users hit this first: it refused to enroll a
 # subscription against a working install and told them to run the installer
 # again. The device-authorization step still fails offline here -- what must not

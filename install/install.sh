@@ -2883,21 +2883,28 @@ toggle_claude() {
   esac
 }
 
-toggle_codex() {
-  local f="$codex_config_file" state="absent" tmp
-  if [ -f "$f" ]; then
-    state="$(awk '
-      /^[[:space:]]*\[[[:space:]]*model_providers[[:space:]]*\.[[:space:]]*weave[[:space:]]*\]/ { has_weave = 1 }
-      /^[[:space:]]*\[/ { in_section = 1 }
-      !in_section && /^[[:space:]]*model_provider[[:space:]]*=[[:space:]]*"weave"[[:space:]]*$/ { active_weave = 1 }
-      !in_section && /^[[:space:]]*model_provider[[:space:]]*=/ { has_active_provider = 1 }
-      END {
-        if (!has_weave) print "absent"
-        else if (active_weave) print "on"
-        else print (has_active_provider ? "absent" : "off")
-      }
-    ' "$f")"
+codex_routing_state() {
+  local f="$codex_config_file"
+  if [ ! -f "$f" ]; then
+    printf 'absent\n'
+    return 0
   fi
+  awk '
+    /^[[:space:]]*\[[[:space:]]*model_providers[[:space:]]*\.[[:space:]]*weave[[:space:]]*\]/ { has_weave = 1 }
+    /^[[:space:]]*\[/ { in_section = 1 }
+    !in_section && /^[[:space:]]*model_provider[[:space:]]*=[[:space:]]*"weave"[[:space:]]*$/ { active_weave = 1 }
+    !in_section && /^[[:space:]]*model_provider[[:space:]]*=/ { has_active_provider = 1 }
+    END {
+      if (!has_weave) print "absent"
+      else if (active_weave) print "on"
+      else print (has_active_provider ? "absent" : "off")
+    }
+  ' "$f"
+}
+
+toggle_codex() {
+  local f="$codex_config_file" state tmp
+  state="$(codex_routing_state)"
 
   case "$mode" in
     status)
@@ -3657,7 +3664,7 @@ run_router_status() {
   # Administrative lookup includes parked credentials; routing status must not.
   toggle_claude
   printf 'Status describes this scope only, not a running session; other scopes or runtime overrides may differ. Restart Claude Code after on/off changes.\n'
-  printf 'Codex: %s\n' "$(if [ "${codex_endpoint%/}" = "${base_url%/}" ]; then printf 'points at Router'; elif [ -n "$codex_endpoint" ]; then printf 'different endpoint (%s)' "$codex_endpoint"; else printf 'not configured'; fi)"
+  printf 'Codex: %s\n' "$(if [ "$(codex_routing_state)" = "off" ]; then printf "off (default provider). Run 'on --codex' to re-enable."; elif [ "${codex_endpoint%/}" = "${base_url%/}" ]; then printf 'points at Router'; elif [ -n "$codex_endpoint" ]; then printf 'different endpoint (%s)' "$codex_endpoint"; else printf 'not configured'; fi)"
   if models_api GET "/v1/subscriptions/accounts"; then
     printf 'Subscription accounts:\n'
     if [ "$(printf '%s' "$models_http_body" | jq 'length')" -eq 0 ]; then
