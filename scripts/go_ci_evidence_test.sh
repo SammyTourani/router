@@ -81,7 +81,8 @@ reset_fixture() {
 }
 
 write_evidence() {
-	printf 'tree %s\nparent_tree %s\n' "$1" "$2" >"$FAKE_GH/artifacts/42/go-checks-evidence/evidence"
+	jq -n --arg tree "$1" --arg parent_tree "$2" '{tree: $tree, parent_tree: $parent_tree}' \
+		>"$FAKE_GH/artifacts/42/go-checks-evidence/evidence"
 }
 
 failures=0
@@ -155,9 +156,11 @@ run_case "artifact without an evidence file keeps checks on" false "artifact has
 run_case "different tested tree keeps checks on" false "tested tree $parent_tree" write_evidence "$parent_tree" "$parent_tree"
 run_case "same tree on a different parent keeps checks on" false "tested on parent tree $tree" write_evidence "$tree" "$tree"
 run_case "malformed evidence keeps checks on" false "tested tree unknown" \
-	write_raw_evidence "tree not-a-tree\nparent_tree $parent_tree\n"
-run_case "duplicated evidence lines keep checks on" false "tested tree" \
-	write_raw_evidence "tree $tree\ntree $tree\nparent_tree $parent_tree\n"
+	write_raw_evidence "tree $tree\nparent_tree $parent_tree\n"
+run_case "evidence without a parent tree keeps checks on" false "tested on parent tree unknown" \
+	write_raw_evidence "{\"tree\": \"$tree\"}"
+run_case "non-object evidence keeps checks on" false "tested tree unknown" \
+	write_raw_evidence "[\"$tree\"]"
 
 reset_fixture
 if output=$(cd "$repo" && PATH="$fake_bin:$PATH" bash "$script" reuse "$repository" 3333333333333333333333333333333333333333 2>/dev/null) &&

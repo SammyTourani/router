@@ -305,8 +305,8 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         run: |
           mkdir -p "$RUNNER_TEMP/go-checks-evidence"
-          printf 'tree %s\nparent_tree %s\n' "$(git rev-parse 'HEAD^{tree}')" "$(git rev-parse 'HEAD^1^{tree}')" \
-            >"$RUNNER_TEMP/go-checks-evidence/evidence"
+          jq -n --arg tree "$(git rev-parse 'HEAD^{tree}')" --arg parent_tree "$(git rev-parse 'HEAD^1^{tree}')" \
+            '{tree: $tree, parent_tree: $parent_tree}' >"$RUNNER_TEMP/go-checks-evidence/evidence"
 
       - name: Upload tested Go checks tree
         if: ${{ github.event_name == 'pull_request' }}

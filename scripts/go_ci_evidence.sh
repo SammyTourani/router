@@ -29,11 +29,11 @@ reject() {
 tree=$(git rev-parse --verify --quiet "${commit}^{tree}") || reject "commit $commit is unreadable"
 parent_tree=$(git rev-parse --verify --quiet "${commit}^1^{tree}") || reject "commit $commit has no readable first parent"
 
-pull=$(gh api "repos/$repository/commits/$commit/pulls" \
+pull_request=$(gh api "repos/$repository/commits/$commit/pulls" \
 	--jq "[.[] | select(.merged_at != null and .merge_commit_sha == \"$commit\")] | if length == 1 then .[0] else empty end | [.number, .head.sha, .head.repo.full_name] | @tsv") ||
 	reject "pull request lookup failed"
-[[ -n $pull ]] || reject "no single pull request merged as $commit"
-IFS=$'\t' read -r pull_number head_sha head_repository <<<"$pull"
+[[ -n $pull_request ]] || reject "no single pull request merged as $commit"
+IFS=$'\t' read -r pull_number head_sha head_repository <<<"$pull_request"
 [[ $head_repository == "$repository" ]] || reject "pull request #$pull_number comes from $head_repository"
 
 run=$(gh api "repos/$repository/actions/workflows/test.yml/runs?event=pull_request&head_sha=$head_sha&per_page=100" \
@@ -55,8 +55,8 @@ gh run download "$run_id" --repo "$repository" --name "$artifact_name" --dir "$s
 	reject "Test run $run_id has no $artifact_name artifact"
 [[ -f $scratch/evidence ]] || reject "Test run $run_id artifact has no evidence file"
 
-tested_tree=$(sed -n 's/^tree \([0-9a-f]\{40,64\}\)$/\1/p' "$scratch/evidence")
-tested_parent_tree=$(sed -n 's/^parent_tree \([0-9a-f]\{40,64\}\)$/\1/p' "$scratch/evidence")
+tested_tree=$(jq -r '.tree // empty' "$scratch/evidence" 2>/dev/null || true)
+tested_parent_tree=$(jq -r '.parent_tree // empty' "$scratch/evidence" 2>/dev/null || true)
 [[ $tested_tree == "$tree" ]] || reject "Test run $run_id tested tree ${tested_tree:-unknown}, $commit has $tree"
 [[ $tested_parent_tree == "$parent_tree" ]] ||
 	reject "Test run $run_id tested on parent tree ${tested_parent_tree:-unknown}, $commit has $parent_tree"
