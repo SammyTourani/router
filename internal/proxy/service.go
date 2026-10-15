@@ -4051,15 +4051,15 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 	routeMs := time.Since(routeStart).Milliseconds()
 	s.logPlannerOutcome(ctx, routeRes)
 
-	// Cross-envelope no-progress detector: repeated identical fingerprints in a
-	// window mean the agent is stuck — break the pin and emit a synthetic stop.
-	// Gated to tool-bearing turns so a frozen marker + frozen prompt prefix
-	// can't collide on healthy text-only turns.
+	// Only completed calls are evidence of an agent loop; transport retries
+	// replay the same history without giving the model a chance to progress.
 	toolBearingTurn := inboundToolCallCount > 0 || inboundLastUser.HasToolResult
-	if !agentShadowMode && !routeRes.CallerModelPassthrough && !routeRes.AuthoritativePerTurn && toolBearingTurn && s.noProgress != nil {
-		fp := computeNoProgressFingerprint(decision, promptText, feats.MessageCount, toolProgressMarker(env))
+	trackNoProgress := !agentShadowMode && !routeRes.CallerModelPassthrough && !routeRes.AuthoritativePerTurn && toolBearingTurn && s.noProgress != nil
+	progressMarker := toolProgressMarker(env)
+	if trackNoProgress {
+		fp := computeNoProgressFingerprint(decision, promptText, feats.MessageCount, progressMarker)
 		role := roleForTier(catalog.TierFor(feats.Model))
-		if looped, count := s.noProgress.recordAndDetect(routeRes.SessionKey, installationID, role, fp, time.Now()); looped {
+		if looped, count := s.noProgress.detect(routeRes.SessionKey, installationID, role, fp, time.Now()); looped {
 			return s.handleNoProgressBreak(ctx, w, env, count, installationID, routeRes.SessionKey, role, decision.Model, decision.Provider, feats.Tokens, routeRes.Decision.Reason)
 		}
 	}
@@ -5564,6 +5564,12 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 	}
 	if !agentShadowMode {
 		s.reportPolicyOutcome(ctx, routeRes, decision, effortServed, finalProvider, fastServed, feats.Tokens, in, out, cacheCreation, cacheRead, usageMods, routeMs, proxyMs, proxyErr, policyResp)
+	}
+	if trackNoProgress && proxyErr == nil && ctx.Err() == nil {
+		servedDecision := decision
+		servedDecision.Provider = finalProvider
+		fp := computeNoProgressFingerprint(servedDecision, promptText, feats.MessageCount, progressMarker)
+		s.noProgress.recordAndDetect(routeRes.SessionKey, installationID, roleForTier(catalog.TierFor(feats.Model)), fp, time.Now())
 	}
 	return proxyErr
 }
