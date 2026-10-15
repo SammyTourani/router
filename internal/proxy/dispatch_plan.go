@@ -333,7 +333,7 @@ func (s *Service) afterSubscriptionRotationBudget(ctx context.Context, decision 
 	if errors.Is(rotationErr, ErrSubscriptionPoolUnavailable) {
 		return rotationErr
 	}
-	return errors.Join(ErrSubscriptionPoolExhausted, rotationErr)
+	return errors.Join(subscriptionPoolExhausted(ctx), rotationErr)
 }
 
 func recordWinningCredentials(ctx, credentialCtx context.Context) {

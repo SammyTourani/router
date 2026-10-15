@@ -131,6 +131,23 @@ func ClassifyDispatchError(err error) (DispatchErrorClass, bool) {
 			LogLevel:   "warn",
 			LogMessage: "Rejected forced Claude turn: subscriptions refused third-party client",
 		}, true
+	// Ahead of the pool cases: a billing-gated pool refusal carries both.
+	case errors.Is(err, ErrSpendCapSubscriptionUnavailable):
+		return DispatchErrorClass{
+			Kind:       DispatchErrorSpendCapReached,
+			Status:     http.StatusPaymentRequired,
+			Message:    "A Weave router spend cap has been reached and your subscription can't serve this turn (rate-limited, or the requested model isn't subscription-covered).",
+			LogLevel:   "warn",
+			LogMessage: "Subscription-only request refused: spend cap reached and subscription unavailable",
+		}, true
+	case errors.Is(err, ErrCreditsExhaustedSubscriptionUnavailable):
+		return DispatchErrorClass{
+			Kind:       DispatchErrorCreditsExhausted,
+			Status:     http.StatusPaymentRequired,
+			Message:    "Your Weave router credits are exhausted and your subscription can't serve this turn (rate-limited, or the requested model isn't subscription-covered). Add credits to re-enable paid routing: " + topUpURL,
+			LogLevel:   "warn",
+			LogMessage: "Subscription-only request refused: credits exhausted and subscription unavailable",
+		}, true
 	case errors.Is(err, ErrSubscriptionPoolExhausted):
 		return DispatchErrorClass{
 			Kind:       DispatchErrorSubscriptionPoolExhausted,
@@ -317,22 +334,6 @@ func ClassifyDispatchError(err error) (DispatchErrorClass, bool) {
 			RetryAfter: true,
 			LogLevel:   "error",
 			LogMessage: "Spend-limit check unavailable",
-		}, true
-	case errors.Is(err, ErrSpendCapSubscriptionUnavailable):
-		return DispatchErrorClass{
-			Kind:       DispatchErrorSpendCapReached,
-			Status:     http.StatusPaymentRequired,
-			Message:    "A Weave router spend cap has been reached and your subscription can't serve this turn (rate-limited, or the requested model isn't subscription-covered).",
-			LogLevel:   "warn",
-			LogMessage: "Subscription-only request refused: spend cap reached and subscription unavailable",
-		}, true
-	case errors.Is(err, ErrCreditsExhaustedSubscriptionUnavailable):
-		return DispatchErrorClass{
-			Kind:       DispatchErrorCreditsExhausted,
-			Status:     http.StatusPaymentRequired,
-			Message:    "Your Weave router credits are exhausted and your subscription can't serve this turn (rate-limited, or the requested model isn't subscription-covered). Add credits to re-enable paid routing: " + topUpURL,
-			LogLevel:   "warn",
-			LogMessage: "Subscription-only request refused: credits exhausted and subscription unavailable",
 		}, true
 	case errors.Is(err, cluster.ErrInvalidRoutingKnobs):
 		return DispatchErrorClass{

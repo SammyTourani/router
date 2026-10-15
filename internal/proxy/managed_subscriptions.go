@@ -200,10 +200,10 @@ func (s *Service) leaseManagedSubscription(ctx context.Context, provider, model 
 		return ctx, subscriptions.Lease{}, false, nil
 	}
 	if subscriptionAttemptOnly(ctx) && (!eligible || !s.supportsSubscriptionTransport(provider) || !managedSubscriptionEnrolled(ctx, poolProvider)) && !servedOnSubscription(ctx) {
-		return ctx, subscriptions.Lease{}, true, ErrSubscriptionPoolExhausted
+		return ctx, subscriptions.Lease{}, true, subscriptionPoolExhausted(ctx)
 	}
 	if eligible && (claudeSubscriptionSuppressed(ctx) && provider == providers.ProviderAnthropic || codexSubscriptionSuppressed(ctx) && provider == providers.ProviderOpenAI) && !managedSubscriptionEnrolled(ctx, poolProvider) && !s.managedProviderFallbackAvailable(ctx, poolProvider) {
-		return ctx, subscriptions.Lease{}, true, ErrSubscriptionPoolExhausted
+		return ctx, subscriptions.Lease{}, true, subscriptionPoolExhausted(ctx)
 	}
 	if !eligible || s.managedSubscriptions == nil || !managedSubscriptionEnrolled(ctx, poolProvider) ||
 		poolProvider == subscriptions.ProviderCodex && codexChatEndpoint(ctx) {
@@ -239,7 +239,7 @@ func (s *Service) leaseManagedSubscription(ctx context.Context, provider, model 
 		if modelDenial != nil {
 			return ctx, subscriptions.Lease{}, true, modelDenial
 		}
-		return ctx, subscriptions.Lease{}, true, ErrSubscriptionPoolExhausted
+		return ctx, subscriptions.Lease{}, true, subscriptionPoolExhausted(ctx)
 	}
 	for {
 		if poolProvider == subscriptions.ProviderClaude && claudePoolRefusesClientApp(ctx) {

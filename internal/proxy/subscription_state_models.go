@@ -197,7 +197,7 @@ func (s *Service) dispatchSubscriptionStateModels(ctx context.Context, in failov
 		}
 	}
 	if billing.SubscriptionOnlyFromContext(ctx) && !linkedFirst(ctx) {
-		return -1, ErrSubscriptionPoolExhausted
+		return -1, subscriptionPoolExhausted(ctx)
 	}
 	if ctx.Err() != nil {
 		return -1, ctx.Err()
