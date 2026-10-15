@@ -5663,7 +5663,8 @@ func applyRoutingStateAttrs(
 	return b.String("routing.session_key", sessionKeyHex(sessionKey)).
 		String("routing.pin_role", res.PinRole).
 		String("routing.prior_served_model", res.PriorServedModel).
-		Bool("routing.model_changed", res.PriorServedModel != "" && res.PriorServedModel != servedIdentity)
+		Bool("routing.model_changed", res.PriorServedModel != "" && res.PriorServedModel != servedIdentity).
+		Bool("routing.llm_escalation_applied", res.llmEscalation != nil && res.llmEscalation.applied)
 }
 
 // plannerOutcomeAttr maps the planner's typed outcome to an OTel string.
