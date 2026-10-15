@@ -4055,12 +4055,13 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 	// replay the same history without giving the model a chance to progress.
 	toolBearingTurn := inboundToolCallCount > 0 || inboundLastUser.HasToolResult
 	trackNoProgress := !agentShadowMode && !routeRes.CallerModelPassthrough && !routeRes.AuthoritativePerTurn && toolBearingTurn && s.noProgress != nil
-	progressMarker := toolProgressMarker(env)
+	var progressFingerprint noProgressFingerprint
+	var progressRole string
 	if trackNoProgress {
-		fp := computeNoProgressFingerprint(decision, promptText, feats.MessageCount, progressMarker)
-		role := roleForTier(catalog.TierFor(feats.Model))
-		if looped, count := s.noProgress.detect(routeRes.SessionKey, installationID, role, fp, time.Now()); looped {
-			return s.handleNoProgressBreak(ctx, w, env, count, installationID, routeRes.SessionKey, role, decision.Model, decision.Provider, feats.Tokens, routeRes.Decision.Reason)
+		progressFingerprint = computeNoProgressFingerprint(decision, promptText, feats.MessageCount, toolProgressMarker(env))
+		progressRole = roleForTier(catalog.TierFor(feats.Model))
+		if looped, count := s.noProgress.detect(routeRes.SessionKey, installationID, progressRole, progressFingerprint, time.Now()); looped {
+			return s.handleNoProgressBreak(ctx, w, env, count, installationID, routeRes.SessionKey, progressRole, decision.Model, decision.Provider, feats.Tokens, routeRes.Decision.Reason)
 		}
 	}
 
@@ -4174,6 +4175,9 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 			})
 			otel.Flush(ctx)
 			log.Info("ProxyMessages cache hit", "requested_model", feats.Model, "baseline_model", s.baselineFor(feats.Model), "decision_model", decision.Model, "decision_provider", decision.Provider, "external_id", externalID, "total_ms", time.Since(requestStart).Milliseconds())
+			if trackNoProgress && ctx.Err() == nil {
+				s.noProgress.recordAndDetect(routeRes.SessionKey, installationID, progressRole, progressFingerprint, time.Now())
+			}
 			return nil
 		}
 		s.recordSemanticCacheMiss(ctx)
@@ -5566,10 +5570,7 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 		s.reportPolicyOutcome(ctx, routeRes, decision, effortServed, finalProvider, fastServed, feats.Tokens, in, out, cacheCreation, cacheRead, usageMods, routeMs, proxyMs, proxyErr, policyResp)
 	}
 	if trackNoProgress && proxyErr == nil && ctx.Err() == nil {
-		servedDecision := decision
-		servedDecision.Provider = finalProvider
-		fp := computeNoProgressFingerprint(servedDecision, promptText, feats.MessageCount, progressMarker)
-		s.noProgress.recordAndDetect(routeRes.SessionKey, installationID, roleForTier(catalog.TierFor(feats.Model)), fp, time.Now())
+		s.noProgress.recordAndDetect(routeRes.SessionKey, installationID, progressRole, progressFingerprint, time.Now())
 	}
 	return proxyErr
 }

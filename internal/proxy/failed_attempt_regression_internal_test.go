@@ -3,13 +3,13 @@ package proxy
 import (
 	"bytes"
 	"context"
-	"github.com/google/uuid"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -135,4 +135,27 @@ func TestNoProgressDetectionDoesNotRecordInflightRequests(t *testing.T) {
 	looped, count = tracker.detect(key, install, "high", fp, now.Add(91*time.Second))
 	assert.False(t, looped)
 	assert.Equal(t, 1, count)
+}
+
+func TestProxyMessagesNoProgressStillStopsSuccessfulRescueLoop(t *testing.T) {
+	in := parityAnthropicIngress()
+	failed := &parityUpstream{paidErr: upstreamErr(http.StatusServiceUnavailable, `{"error":{"message":"temporarily unavailable"}}`)}
+	rescued := &parityUpstream{okBody: in.upstreamOK(false)}
+	svc := NewService(staticRouter{decision: router.Decision{Provider: providers.ProviderFireworks, Model: "deepseek/deepseek-v4-pro", Reason: "test"}}, map[string]providers.Client{
+		providers.ProviderFireworks: failed, providers.ProviderOpenRouter: failed, providers.ProviderAnthropic: rescued,
+	}, nil, false, nil, nil, false, providers.ProviderAnthropic, in.model, nil).WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderFireworks: {}, providers.ProviderOpenRouter: {}, providers.ProviderAnthropic: {}})
+	svc.retrySleep = noopSleep
+	body := noProgressRetryBody(in.model)
+	ctx := context.WithValue(context.Background(), InstallationIDContextKey{}, parityInstallationID)
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		require.NoError(t, svc.ProxyMessages(ctx, body, rec, httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))))
+		if i < 4 {
+			assert.Contains(t, rec.Body.String(), `"text":"hi"`)
+			assert.NotContains(t, rec.Body.String(), "No-progress loop detected")
+		} else {
+			assert.Contains(t, rec.Body.String(), "No-progress loop detected")
+		}
+	}
+	assert.Equal(t, 4, rescued.paidDispatches)
 }
