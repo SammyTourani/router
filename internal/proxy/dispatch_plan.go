@@ -259,7 +259,7 @@ func (s *Service) dispatchPlanned(ctx context.Context, in failoverInputs, plan i
 			}
 			lastSubscriptionErr = attemptErr
 			if rotationBudget.remaining <= 0 {
-				return s.afterSubscriptionRotationBudget(ctx, decision, account+1, attemptErr)
+				return dispatchAbort{err: s.afterSubscriptionRotationBudget(ctx, decision, account+1, attemptErr)}
 			}
 			if in.buf != nil {
 				in.buf.Discard()
@@ -339,7 +339,7 @@ func (s *Service) afterSubscriptionRotationBudget(ctx context.Context, decision 
 // subscriptionRotationFailure preserves transport faults when no alternate account
 // can be leased; an empty rotation pool does not establish quota exhaustion.
 func subscriptionRotationFailure(poolErr, attemptErr error) error {
-	if isSubscriptionPoolError(poolErr) && providers.IsRetryable(attemptErr) && upstreamStatus(attemptErr) != http.StatusTooManyRequests {
+	if errors.Is(poolErr, ErrSubscriptionPoolExhausted) && !errors.Is(poolErr, ErrSubscriptionPoolUnavailable) && providers.IsRetryable(attemptErr) && upstreamStatus(attemptErr) != http.StatusTooManyRequests {
 		return attemptErr
 	}
 	return errors.Join(poolErr, attemptErr)

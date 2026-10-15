@@ -101,14 +101,8 @@ func (r *fingerprintRing) recordAndDetect(fp noProgressFingerprint, now time.Tim
 	if len(r.entries) > noProgressWindowSize {
 		r.entries = r.entries[len(r.entries)-noProgressWindowSize:]
 	}
-	cutoff := now.Add(-noProgressTimeWindow)
-	n := 0
-	for _, e := range r.entries {
-		if e.fp == fp && !e.when.Before(cutoff) {
-			n++
-		}
-	}
-	return n >= noProgressMatchThreshold, n
+	count = r.countMatches(fp, now, noProgressWindowSize)
+	return count >= noProgressMatchThreshold, count
 }
 
 // noProgressTracker is the package-level tracker. Construct via
@@ -250,17 +244,26 @@ func (t *noProgressTracker) detect(sessionKey [sessionpin.SessionKeyLen]byte, in
 	if !ok || ring == nil {
 		return false, 1
 	}
-	ring.mu.Lock()
-	defer ring.mu.Unlock()
-	count := 1
+	return ring.detect(fp, now)
+}
+
+func (r *fingerprintRing) detect(fp noProgressFingerprint, now time.Time) (bool, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	count := 1 + r.countMatches(fp, now, noProgressWindowSize-1)
+	return count >= noProgressMatchThreshold, count
+}
+
+// Caller holds r.mu.
+func (r *fingerprintRing) countMatches(fp noProgressFingerprint, now time.Time, limit int) int {
 	cutoff := now.Add(-noProgressTimeWindow)
-	start := max(0, len(ring.entries)-(noProgressWindowSize-1))
-	for _, entry := range ring.entries[start:] {
+	count := 0
+	for _, entry := range r.entries[max(0, len(r.entries)-limit):] {
 		if entry.fp == fp && !entry.when.Before(cutoff) {
 			count++
 		}
 	}
-	return count >= noProgressMatchThreshold, count
+	return count
 }
 
 // noProgressBucketKey picks the LRU bucket key. ok=false means no anchor is

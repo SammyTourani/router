@@ -159,3 +159,59 @@ func TestProxyMessagesNoProgressStillStopsSuccessfulRescueLoop(t *testing.T) {
 	}
 	assert.Equal(t, 4, rescued.paidDispatches)
 }
+
+// rotationFailureLeaser can spend part of a shared admission budget or fail a later lease.
+type rotationFailureLeaser struct {
+	*scriptedSubscriptionLeaser
+	afterLease func()
+	leaseErr   error
+}
+
+func (l *rotationFailureLeaser) Lease(ctx context.Context, owner auth.SubscriptionOwner, provider subscriptions.Provider, model string) (subscriptions.Lease, bool, error) {
+	if l.leaseErr != nil && l.next >= len(l.leases) {
+		return subscriptions.Lease{}, true, l.leaseErr
+	}
+	lease, managed, err := l.scriptedSubscriptionLeaser.Lease(ctx, owner, provider, model)
+	if l.afterLease != nil {
+		l.afterLease()
+	}
+	return lease, managed, err
+}
+
+func TestDispatchPreservesFailureWhenSharedAdmissionBudgetEnds(t *testing.T) {
+	for _, status := range []int{http.StatusBadGateway, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			now := time.Now()
+			leaser := &rotationFailureLeaser{scriptedSubscriptionLeaser: &scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "synthetic-account", AccessToken: "synthetic-token"}}}, afterLease: func() { now = now.Add(2 * time.Second) }}
+			svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderOpenAI: &fakeClient{name: providers.ProviderOpenAI}}).WithManagedSubscriptions(leaser)
+			svc.now = func() time.Time { return now }
+			svc.retrySleep = noopSleep
+			ctx, budget := withSubscriptionAdmissionBudget(managedSubscriptionContext(auth.SubscriptionProviderCodex))
+			budget.remaining = time.Second
+			failure := &providers.UpstreamErrorResponse{Status: status}
+			rec := httptest.NewRecorder()
+			buf := newPreludeBuffer(rec)
+			attempts := 0
+			_, err := svc.dispatchWithFallback(ctx, failoverInputs{w: rec, buf: buf, initialDecision: router.Decision{Model: "gpt-5.6-sol", Provider: providers.ProviderOpenAI}, purpose: inference.PurposeAnthropicMessages, bindings: []catalog.ProviderBinding{{Provider: providers.ProviderOpenAI}}, attempt: func(context.Context, router.Decision, providers.Client) error { attempts++; return failure }})
+			require.ErrorIs(t, err, failure)
+			assert.False(t, isSubscriptionPoolError(err))
+			assert.Equal(t, status, upstreamStatus(err))
+			assert.Equal(t, 1, attempts)
+		})
+	}
+}
+
+func TestDispatchPreservesLeaseServiceOutageAfterProviderFailure(t *testing.T) {
+	leaser := &rotationFailureLeaser{scriptedSubscriptionLeaser: &scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "synthetic-account", AccessToken: "synthetic-token"}}}, leaseErr: context.DeadlineExceeded}
+	svc := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderOpenAI: &fakeClient{name: providers.ProviderOpenAI}}).WithManagedSubscriptions(leaser)
+	svc.retrySleep = noopSleep
+	rec := httptest.NewRecorder()
+	buf := newPreludeBuffer(rec)
+	failure := &providers.UpstreamErrorResponse{Status: http.StatusBadGateway}
+	_, err := svc.dispatchWithFallback(managedSubscriptionContext(auth.SubscriptionProviderCodex), failoverInputs{w: rec, buf: buf, initialDecision: router.Decision{Model: "gpt-5.6-sol", Provider: providers.ProviderOpenAI}, purpose: inference.PurposeAnthropicMessages, bindings: []catalog.ProviderBinding{{Provider: providers.ProviderOpenAI}}, attempt: func(context.Context, router.Decision, providers.Client) error { return failure }})
+	require.ErrorIs(t, err, ErrSubscriptionPoolUnavailable)
+	class, ok := ClassifyDispatchError(err)
+	require.True(t, ok)
+	assert.Equal(t, DispatchErrorSubscriptionPoolUnavailable, class.Kind)
+	assert.Equal(t, http.StatusServiceUnavailable, class.Status)
+}

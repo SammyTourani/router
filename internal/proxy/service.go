@@ -4053,6 +4053,8 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 
 	// Only completed calls are evidence of an agent loop; transport retries
 	// replay the same history without giving the model a chance to progress.
+	// Restrict detection to tool-bearing turns so frozen markers and prompt
+	// prefixes on healthy text-only turns cannot trigger a false stop.
 	toolBearingTurn := inboundToolCallCount > 0 || inboundLastUser.HasToolResult
 	trackNoProgress := !agentShadowMode && !routeRes.CallerModelPassthrough && !routeRes.AuthoritativePerTurn && toolBearingTurn && s.noProgress != nil
 	var progressFingerprint noProgressFingerprint
