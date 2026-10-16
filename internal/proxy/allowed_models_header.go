@@ -143,8 +143,8 @@ func telemetryDecisionReason(ctx context.Context, reason string) string {
 // the request allowlist, or from the installation allowlist under
 // gateway-exclusive routing: the force is a strict pin and outranks both.
 // Callers must already have validated the model against installation policy
-// (forcedModelBinding); a policy, context-window or advisor-pairing exclusion
-// is never lifted.
+// (forcedModelBinding); a policy, context-window, advisor-pairing or
+// unsigned-history exclusion is never lifted.
 func (s *Service) readmitForcedModel(
 	ctx context.Context,
 	req router.Request,
@@ -164,6 +164,9 @@ func (s *Service) readmitForcedModel(
 		return excluded
 	}
 	if advisorRejectsModel(env, pin.Model) {
+		return excluded
+	}
+	if gemini3xRequiresSignedHistory(pin.Model) && env.HasUnsignedToolCallHistory() {
 		return excluded
 	}
 	outputReserve := contextWindowOutputReserve
