@@ -140,7 +140,8 @@ func telemetryDecisionReason(ctx context.Context, reason string) string {
 }
 
 // readmitForcedModel lifts a forced model's exclusion when it stems only from
-// the request allowlist: the force is a strict pin and outranks the header.
+// the request allowlist, or from the installation allowlist under
+// gateway-exclusive routing: the force is a strict pin and outranks both.
 // Callers must already have validated the model against installation policy
 // (forcedModelBinding); a policy, context-window or advisor-pairing exclusion
 // is never lifted.
@@ -152,17 +153,14 @@ func (s *Service) readmitForcedModel(
 	pin sessionpin.Pin,
 ) map[string]struct{} {
 	excluded := req.ExcludedModels
-	subset := requestAllowedModelSet(ctx)
-	if subset == nil {
-		return excluded
-	}
-	if _, inSubset := subset[pin.Model]; inSubset {
+	gatewayAllowlisted := len(s.gatewayProvidersForRequest(ctx)) > 0 && !modelPermittedByAllowlist(ctx, pin.Model)
+	if modelInRequestSubset(ctx, pin.Model) && !gatewayAllowlisted {
 		return excluded
 	}
 	if _, ok := excluded[pin.Model]; !ok {
 		return excluded
 	}
-	if _, ok := s.policyExcludedModels(ctx)[pin.Model]; ok {
+	if _, ok := s.forcePolicyExcludedModels(ctx)[pin.Model]; ok {
 		return excluded
 	}
 	if advisorRejectsModel(env, pin.Model) {
