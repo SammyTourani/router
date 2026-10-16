@@ -422,6 +422,16 @@ func subscriptionOnlyUnavailable(ctx context.Context) error {
 	return ErrCreditsExhaustedSubscriptionUnavailable
 }
 
+// subscriptionPoolExhausted is the pool-exhaustion refusal. When a depleted
+// balance or reached cap disabled paid fallback, it also carries that gate's
+// refusal so the client is told why, not just to retry.
+func subscriptionPoolExhausted(ctx context.Context) error {
+	if reason, ok := billing.SubscriptionOnlyReasonFromContext(ctx); ok && reason != billing.SubscriptionOnlyLinkedFirst {
+		return errors.Join(subscriptionOnlyUnavailable(ctx), ErrSubscriptionPoolExhausted)
+	}
+	return ErrSubscriptionPoolExhausted
+}
+
 // errBypassRetryable is returned by bypassToAnthropic when the bypass attempt
 // hit a retryable upstream error (e.g., Anthropic 429 weekly-limit) BEFORE
 // writing any response bytes. The caller should fall through to the normal

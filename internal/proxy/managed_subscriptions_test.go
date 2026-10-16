@@ -370,6 +370,9 @@ func TestLeaseManagedSubscription_LinkedFirstExhaustedPool_NoFallbackKey_Refuses
 	_, _, managed, err := svc.leaseManagedSubscription(ctx, providers.ProviderAnthropic, "claude-opus-4-8")
 	require.ErrorIs(t, err, ErrSubscriptionPoolExhausted)
 	require.True(t, managed)
+	cls, ok := ClassifyDispatchError(err)
+	require.True(t, ok)
+	assert.Equal(t, DispatchErrorSubscriptionPoolExhausted, cls.Kind, "a funded linked-first turn must not claim credits are exhausted")
 }
 
 func TestLeaseManagedSubscription_CreditsDepletedExhaustedPool_StillRefuses(t *testing.T) {
@@ -385,6 +388,10 @@ func TestLeaseManagedSubscription_CreditsDepletedExhaustedPool_StillRefuses(t *t
 	_, _, managed, err := svc.leaseManagedSubscription(ctx, providers.ProviderAnthropic, "claude-opus-4-8")
 	require.ErrorIs(t, err, ErrSubscriptionPoolExhausted)
 	require.True(t, managed)
+	cls, ok := ClassifyDispatchError(err)
+	require.True(t, ok)
+	assert.Equal(t, DispatchErrorCreditsExhausted, cls.Kind, "a depleted balance, not pool capacity, is why the turn can't be served")
+	assert.Equal(t, http.StatusPaymentRequired, cls.Status)
 }
 
 func TestDispatchWithFallbackRotatesManagedAccountBeforeCommit(t *testing.T) {

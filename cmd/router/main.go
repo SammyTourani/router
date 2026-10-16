@@ -156,6 +156,13 @@ func main() {
 		panic(err)
 	}
 	logger.Info("Router deployment mode", "mode", deploymentMode)
+	allowCodexCredits, creditsErr := config.CodexExtraCreditsAllowed()
+	if creditsErr != nil {
+		panic(creditsErr)
+	}
+	if allowCodexCredits && deploymentMode != server.DeploymentModeSelfHosted {
+		panic("ROUTER_CODEX_ALLOW_EXTRA_CREDITS is supported only in selfhosted mode")
+	}
 
 	if err := validateManagedServingBoot(deploymentMode, osEnvLookup); err != nil {
 		logger.Error("Managed serving configuration is incomplete; refusing to boot", "mode", deploymentMode, "err", err)
@@ -266,6 +273,8 @@ func main() {
 			openaiBaseURL,
 			upstreamIDsForProvider(providers.ProviderOpenAI),
 		)
+		openaiClient.SetCodexExtraCreditsAllowed(allowCodexCredits)
+		logger.Info("Codex subscription credit policy configured", "allow_extra_credits", allowCodexCredits)
 		// Local tests can point the subscription branch at a deterministic native
 		// Responses mock without changing the production ChatGPT endpoint.
 		if deploymentMode == server.DeploymentModeSelfHosted {
@@ -1311,6 +1320,7 @@ func main() {
 	servedModels := proxyRoutableModels(routingTargets, availableProviders, hmmRouter != nil)
 
 	proxySvc := proxy.NewService(routeEntry, providerMap, telemetryEmitter, embedOnlyUser, semanticCache, pinStore, hardPinExplore, hardPinProvider, hardPinModel, repo.Telemetry).
+		WithCodexExtraCredits(allowCodexCredits).
 		WithSessionStrategyStore(sessionStrategyStore).
 		WithSessionTurnClock(sessionTurnClock).
 		WithEscalation(escalationStore, escalationObserver).

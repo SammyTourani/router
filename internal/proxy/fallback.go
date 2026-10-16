@@ -647,7 +647,7 @@ func (s *Service) dispatchSubscriptionAlternatives(ctx context.Context, in failo
 		return 0, ctx.Err()
 	}
 	if paidFallbackForbidden(ctx) {
-		return 0, ErrSubscriptionPoolExhausted
+		return 0, subscriptionPoolExhausted(ctx)
 	}
 	if in.buf != nil {
 		in.buf.Discard()

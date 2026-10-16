@@ -88,13 +88,27 @@ func (c *Client) checkCodexIncludedQuota(ctx context.Context, model string) erro
 	planReported := quotaStatus.PlanType != ""
 	limitReached := (quotaStatus.SpendControl != nil && quotaStatus.SpendControl.Reached) ||
 		(quotaStatus.RateLimitReachedType != nil && codexReachedTypes[quotaStatus.RateLimitReachedType.Type])
+	creditReason := codexCreditsDisabled
+	if c.allowCodexExtraCredits {
+		var metadata struct {
+			Credits      json.RawMessage `json:"credits"`
+			SpendControl json.RawMessage `json:"spend_control"`
+			ReachedType  json.RawMessage `json:"rate_limit_reached_type"`
+		}
+		if err := json.Unmarshal(body, &metadata); err != nil {
+			return codexQuotaUnavailable()
+		}
+		creditReason = codexCreditAdmissionReason(metadata.Credits, metadata.SpendControl, metadata.ReachedType)
+	}
+	allowCredits := creditReason == codexCreditsAvailable && quotaStatus.RateLimit != nil &&
+		(quotaStatus.RateLimit.Primary != nil || quotaStatus.RateLimit.Secondary != nil)
 	// Windows go first so an exhausted window keeps its reset time.
-	if err = validateCodexIncludedQuota(quotaStatus.RateLimit, planReported || limitReached); err != nil {
-		logCodexQuotaDenial(log, err, "plan_type", quotaStatus.PlanType, "has_rate_limit", quotaStatus.RateLimit != nil)
+	if err = validateCodexIncludedQuota(quotaStatus.RateLimit, planReported || limitReached); err != nil && !(allowCredits && codexIncludedLimitReached(err)) {
+		logCodexQuotaDenial(log, err, "plan_type", quotaStatus.PlanType, "has_rate_limit", quotaStatus.RateLimit != nil, "credit_reason", creditReason, "allow_credits", allowCredits)
 		return err
 	}
-	if limitReached {
-		log.Info("Codex workspace limit preflight denied inference", "plan_type", quotaStatus.PlanType)
+	if limitReached && !allowCredits {
+		log.Info("Codex workspace limit preflight denied inference", "plan_type", quotaStatus.PlanType, "credit_reason", creditReason)
 		return codexQuotaExhausted(0)
 	}
 	for _, modelRateLimit := range quotaStatus.AdditionalRateLimits {

@@ -333,7 +333,7 @@ func (s *Service) afterSubscriptionRotationBudget(ctx context.Context, decision 
 	if errors.Is(rotationErr, ErrSubscriptionPoolUnavailable) {
 		return rotationErr
 	}
-	return subscriptionRotationFailure(ErrSubscriptionPoolExhausted, rotationErr)
+	return subscriptionRotationFailure(subscriptionPoolExhausted(ctx), rotationErr)
 }
 
 // subscriptionRotationFailure preserves transport faults when no alternate account

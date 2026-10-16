@@ -50,7 +50,20 @@ An adapter's subscription capability describes transport support, not a guarante
 that the provider cannot charge extra usage. Codex checks the authenticated
 read-only `/backend-api/wham/usage` endpoint
 before each inference attempt. Missing, unavailable, malformed, or exhausted
-included quota skips that account even when purchased OpenAI credits are present.
+included quota skips that account even when purchased OpenAI credits are present,
+by default. A self-hosted operator can explicitly set
+`ROUTER_CODEX_ALLOW_EXTRA_CREDITS=true` to permit available subscription credits.
+For attempts that require extra credits, the authenticated usage response must
+report `has_credits=true` (the numeric
+balance may be hidden), or unlimited credits. When a balance is reported,
+it must be a positive finite number. Unknown quota, exhausted model-specific
+quota, workspace/member spending limits, and provider authentication or quota
+rejections still block the attempt. Unavailable credits block attempts that need
+extra credits; they do not block remaining included usage. This setting affects both enrolled Codex
+accounts and caller-presented Codex subscription logins on that self-hosted
+deployment. Available subscription credits are tried before any separately
+authorized OpenAI API-key fallback. It neither buys credits nor authorizes
+API-key fallback. Provider-side balances and spending limits remain authoritative.
 The same check covers matching model-specific limits using the final upstream
 model after aliases. A model-specific rejection rotates the attempt without
 marking the whole account exhausted or placing it on cooldown. Claude accounts with no
@@ -106,7 +119,8 @@ are observations, not an atomic included-only reservation: an unobserved Claude
 account or
 an in-flight request can cross into provider-enabled extra usage before the router
 observes it. Disable extra usage at the provider to require a strict no-extra-usage
-boundary. The router neither enables extra usage nor uses known overage as a
+boundary. The router never enables extra usage on the provider account. Except for the
+explicit self-hosted Codex credit opt-in above, it does not use known overage as a
 last-resort account, and observed paid overage is excluded from included-capacity
 billing and coverage. Replay tests exercise real adapters against synthetic HTTP
 upstreams without replacing their subscription capability.
@@ -149,3 +163,22 @@ owner has enrolled multiple provider users in the same workspace, the old unique
 index cannot represent them: rollback fails transactionally until an operator
 reconciles those registrations. It never chooses a seat, deletes credentials, or
 reassigns ownership automatically.
+
+### Enabling Codex subscription credits locally
+
+Add `ROUTER_CODEX_ALLOW_EXTRA_CREDITS=true` to the server environment (for the
+standard Docker Compose setup, `.env.local` is loaded through `env_file`). Recreate
+only the `server` service using your existing Compose files and project name;
+restarting an existing container does not reload its environment. No harness
+settings or provider API keys change. Set it back to `false` and recreate the
+server to restore included-only admission. The startup log reports the effective
+`allow_extra_credits` value.
+
+Existing authentication failures and durable account cooldowns are preserved;
+enabling credits does not clear a previously recorded cooldown. Wait for its
+expiry or use the existing account-management flow after resolving the provider
+rejection. Included-quota observations alone no longer suppress an opted-in
+Codex account: every admitted attempt verifies fresh quota/credit metadata.
+Configure the spending allowance with OpenAI; this switch is spending consent,
+not a router-enforced monetary cap. No inference is needed to test the option;
+regression tests use synthetic quota responses and a local provider server.

@@ -48,6 +48,7 @@ Claude Code keep using the user's logged-in plan.
 | `ANTHROPIC_API_KEY`   | *(none — passthrough)*                                    | Router's own Anthropic key. When unset, client `Authorization` headers pass through. |
 | `OPENAI_API_KEY`      | *(none)*                                                  | Enables the OpenAI provider (Chat Completions API). |
 | `OPENAI_BASE_URL`     | `https://api.openai.com`                                  | Override for OpenAI (e.g. Azure OpenAI). |
+| `ROUTER_CODEX_ALLOW_EXTRA_CREDITS` | `false` | Self-hosted only. Allows enrolled and caller-presented Codex logins to use verified available ChatGPT subscription credits after included quota runs out. Applies to all Codex accounts served by this deployment; does not enable API-key fallback, buy credits, or change Claude extra usage. Invalid values or enabling it in managed mode fail startup. |
 | `ROUTER_CODEX_BASE_URL` | `https://chatgpt.com/backend-api/codex`                  | Local-testing override for the ChatGPT subscription Responses backend; leave unset in production. |
 | `MINIMAX_API_KEY`     | *(none)*                                                   | Enables the native MiniMax provider through its OpenAI-compatible API. |
 | `MINIMAX_REGION`      | `global`                                                   | Set to `cn` (or `china`) to use the mainland-China endpoint. |
