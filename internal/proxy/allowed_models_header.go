@@ -153,8 +153,8 @@ func (s *Service) readmitForcedModel(
 	pin sessionpin.Pin,
 ) map[string]struct{} {
 	excluded := req.ExcludedModels
-	gatewayAllowlisted := len(s.gatewayProvidersForRequest(ctx)) > 0 && !modelPermittedByAllowlist(ctx, pin.Model)
-	if modelInRequestSubset(ctx, pin.Model) && !gatewayAllowlisted {
+	bypassesAllowlist := len(s.gatewayProvidersForRequest(ctx)) > 0 && !modelPermittedByAllowlist(ctx, pin.Model)
+	if modelInRequestSubset(ctx, pin.Model) && !bypassesAllowlist {
 		return excluded
 	}
 	if _, ok := excluded[pin.Model]; !ok {
