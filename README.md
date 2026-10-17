@@ -43,9 +43,10 @@ loved by Robinhood, PostHog, Reducto, and hundreds of others.*
 
 Point Claude Code, Codex, Cursor, or your own app at `localhost:8080`. The router:
 
-- 🎯 **Routes per action.** A cluster scorer derived from
-  [Avengers-Pro](https://arxiv.org/abs/2508.12631) [^1] picks the right
-  model from your enabled providers, for every upstream API request.
+- 🎯 **Routes per action.** The default `cluster` strategy uses a scorer derived
+  from [Avengers-Pro](https://arxiv.org/abs/2508.12631) [^1] to pick a model
+  from your enabled providers for each upstream API request. Managed workers
+  may register policy strategies instead; see the configuration reference.
   (See [docs/SEMANTICS.md](docs/SEMANTICS.md) for the canonical terminology:
   the router routes per **action**, not per **turn**.)
 - 🔌 **Speaks everyone's API.** Anthropic Messages, OpenAI Chat Completions,
@@ -54,8 +55,9 @@ Point Claude Code, Codex, Cursor, or your own app at `localhost:8080`. The route
   OpenRouter (or any OpenAI-compatible endpoint).
 - 🔒 **BYOK by default.** Provider keys stay on your box, encrypted at rest when
   `EXTERNAL_KEY_ENCRYPTION_KEY` is set ([BYOK encryption](docs/CONFIGURATION.md#byok-encryption)).
-- 📊 **Observable.** OTLP traces out of the box. See them in the Weave dashboard (http://localhost:8080/ui/dashboard) or drop in Honeycomb, Datadog,
-  Grafana, whatever.
+- 📊 **Observable.** OTLP traces are available when you configure an
+  `OTEL_EXPORTER_OTLP_ENDPOINT`. Send them to Honeycomb, Datadog, Grafana, or
+  another OTLP-compatible collector; see the configuration reference.
 
 ## 30-second quickstart
 
