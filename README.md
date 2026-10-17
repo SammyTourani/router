@@ -52,7 +52,8 @@ Point Claude Code, Codex, Cursor, or your own app at `localhost:8080`. The route
   Gemini native. Streaming, tools, vision, the works.
 - 🧠 **Knows OSS too.** DeepSeek, Kimi, GLM, Qwen, Llama, Mistral via
   OpenRouter (or any OpenAI-compatible endpoint).
-- 🔒 **BYOK by default.** Provider keys stay on your box, encrypted at rest.
+- 🔒 **BYOK by default.** Provider keys stay on your box, encrypted at rest when
+  `EXTERNAL_KEY_ENCRYPTION_KEY` is set ([BYOK encryption](docs/CONFIGURATION.md#byok-encryption)).
 - 📊 **Observable.** OTLP traces out of the box. See them in the Weave dashboard (http://localhost:8080/ui/dashboard) or drop in Honeycomb, Datadog,
   Grafana, whatever.
 
@@ -181,11 +182,10 @@ above.
 `~/.codex/config.toml` (or `<repo>/.codex/config.toml` with `--scope project`)
 with a managed `[model_providers.weave]` block and sets `model_provider = "weave"`.
 The provider preserves Codex's existing ChatGPT OAuth login while the router
-key rides in an `X-Weave-Router-Key` HTTP header and the installer selects the
-HMM strategy for the public hosted endpoint. `--codex --local` and custom
-self-hosted URLs keep their router's configured default because the HMM
-sidecar is optional. HMM and forced selections in the native Codex family
-(`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`) use that OAuth credential;
+key rides in an `X-Weave-Router-Key` HTTP header. The installer doesn't pin a
+routing strategy, so every endpoint, hosted or self-hosted, uses its own
+default. HMM and forced selections in the native Codex family
+(`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-sol`) use that OAuth credential;
 every other selected model uses its WorkWeave deployment or BYOK credential,
 matching the Claude Code plugin's model-to-credential dispatch.
 Codex does not load third-party slash-command files, so the installer ships
